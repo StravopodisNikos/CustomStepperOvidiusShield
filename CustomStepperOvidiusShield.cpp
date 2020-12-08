@@ -11,7 +11,7 @@
 using namespace std;
 
 // Constructor
-CustomStepperMetamorphicManipulator::CustomStepperMetamorphicManipulator(int stepID, int stepPin, int dirPin, int enblPin, int homeTriggerPin, int limitSwitchPin2, int limitSwitchPin3, int RED_LED_pin,int GREEN_LED_pin,int BLUE_LED_pin, int spr, int GEAR_FACTOR, int ft )
+CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, int dirPin, int enblPin, int homeTriggerPin, int limitSwitchPin2, int limitSwitchPin3, int RED_LED_pin,int GREEN_LED_pin,int BLUE_LED_pin, int spr, int GEAR_FACTOR, int ft )
 {
     pinMode(stepPin, OUTPUT);
     pinMode(dirPin, OUTPUT);
@@ -36,6 +36,10 @@ CustomStepperMetamorphicManipulator::CustomStepperMetamorphicManipulator(int ste
     _limitSwitchPin2   = limitSwitchPin2;
     _limitSwitchPin3   = limitSwitchPin3;
 
+    _RED_LED_pin    = RED_LED_pin;
+    _GREEN_LED_pin  = GREEN_LED_pin;
+    _BLUE_LED_pin   = BLUE_LED_pin;
+
     _spr            = spr;                                  // Steps per revolution [Found from driver dip switch configuration]
     _GEAR_FACTOR    = GEAR_FACTOR;                          // Gearbox Reduction of stepper motor [depends on Gearbox attached to motor]
     _ft             = ft;                                   // Frequency of stepper driver [Found in Stepper-Motor Driver Specifications]
@@ -49,7 +53,7 @@ CustomStepperMetamorphicManipulator::CustomStepperMetamorphicManipulator(int ste
 // =========================================================================================================== //
 
 // singleStepVarDelay
-void CustomStepperMetamorphicManipulator::singleStepVarDelay(unsigned long delayTime) {
+void CustomStepperOvidiusShield::singleStepVarDelay(unsigned long delayTime) {
   // Custom Stepping Function for Velocity-Acceleration Profiles
 
     unsigned long time_now_micros = micros();
@@ -60,7 +64,7 @@ void CustomStepperMetamorphicManipulator::singleStepVarDelay(unsigned long delay
 
 // =========================================================================================================== //
 
-void CustomStepperMetamorphicManipulator::read_STP_EEPROM_settings( byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
+void CustomStepperOvidiusShield::read_STP_EEPROM_settings( byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
 {
 	/*
 	 *	This function is executed at setup() to read form EEPROM and Initialize the global variables of Joint1 Stepper
@@ -77,7 +81,7 @@ void CustomStepperMetamorphicManipulator::read_STP_EEPROM_settings( byte * curre
 
 } // END FUNCTION: readEEPROMsettings
 
-void CustomStepperMetamorphicManipulator::save_STP_EEPROM_settings(byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
+void CustomStepperOvidiusShield::save_STP_EEPROM_settings(byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
 {
 	/*
 	 *	Executed before exit setup\action loops - NEVER INSIDE LOOP
@@ -101,42 +105,45 @@ void CustomStepperMetamorphicManipulator::save_STP_EEPROM_settings(byte * curren
 
 // =========================================================================================================== //
 
-// setStepperHomePositionSlow
-bool CustomStepperMetamorphicManipulator::setStepperHomePositionSlow(){
+bool CustomStepperOvidiusShield::setStepperHomePositionSlow(unsigned long *currentAbsPos, volatile byte *currentDirStatus,  int *stp_error){
+/*
+ *  HOMES MOTOR - currentDirStatus changes value inside external interrupt arduino functions
+ *  Returns true if error_code = 0
+ */
 
-  unsigned long homing_stepping_delay = 500;
+  unsigned long homing_stepping_delay = STP_HOMING_DELAY;
+  
+  *stp_error = 1;                             
+  int times_limit_hall_activated = 0;
 
-  Serial.print("[ Stepper ID: "); Serial.print(_stepID); Serial.println("] HOMING ... ");
-  
-  digitalWrite(_ledPin, HIGH);                                                                          
-  
-  while( (digitalRead(_homeTriggerPin) == 0 ) )
+  while( (digitalRead(_homeTriggerPin)) )
   {   
-      //move motor                                                                     
-      CustomStepperMetamorphicManipulator::singleStepVarDelay(homing_stepping_delay);                  
+      //move motor
+      digitalWrite(_dirPin, *currentDirStatus);
 
-      //either MIN or MAX limit switches triggered
-      if( (digitalRead(_limitSwitchPin2) == HIGH) || (digitalRead(_limitSwitchPin3) == HIGH) )
-      {
-          // Change DIR Pin status
-          digitalWrite(_dirPin, !currentDirStatus);
-      }
+      CustomStepperOvidiusShield::singleStepVarDelay(homing_stepping_delay);                  
+
+      // Everything worked
+      *stp_error = 0;
   }
 
   // sets global variable to new position(HOME) value
-  long currentAbsPos = 0; 
+  *currentAbsPos = 0; 
 
-  Serial.print("[ Stepper ID: "); Serial.print(_stepID); Serial.println("] HOMING FINISHED ");
-  
-  digitalWrite(_ledPin, LOW);                        
-
-return true;
+if (*stp_error == 0)
+{
+  return true;
+}
+else
+{
+  return false;
+}
 } // END OF FUNCTION
 
 // =========================================================================================================== //
 
 // setStepperHomePositionFast
-bool CustomStepperMetamorphicManipulator::setStepperHomePositionFast(double * currentAbsPos_double, unsigned long * currentAbsPos, byte * currentDirStatus){
+bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsPos_double, unsigned long * currentAbsPos, byte * currentDirStatus){
 
   unsigned long homing_stepping_delay = 500;                                // micros
 
@@ -163,11 +170,8 @@ bool CustomStepperMetamorphicManipulator::setStepperHomePositionFast(double * cu
   
   digitalWrite(_dirPin, *currentDirStatus);
 
-  // 4. execute homing
-  Serial.print("[ Stepper ID: "); Serial.print(_stepID); Serial.println("] HOMING ... ");
-  
-  digitalWrite(_ledPin, HIGH);                                                                          
-  
+  // 4. execute homing  
+
   int motor_step = 0;
   // steps motor for pre-calculated number of steps and for the period that hall pin is not triggered
   while( (motor_step <= *currentAbsPos) && (digitalRead(_homeTriggerPin) == 0 )){
@@ -183,10 +187,6 @@ bool CustomStepperMetamorphicManipulator::setStepperHomePositionFast(double * cu
 
   // 5. sets global variable to new position(HOME) value
   *currentAbsPos = 0; 
-
-  Serial.print("[ Stepper ID: "); Serial.print(_stepID); Serial.println("] HOMING FINISHED ");
-  
-  digitalWrite(_ledPin, LOW);                        
 
 return true;
 } // END OF FUNCTION
