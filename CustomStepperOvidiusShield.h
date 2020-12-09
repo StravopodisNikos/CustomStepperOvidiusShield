@@ -14,7 +14,6 @@
 #define MAX_POS_JOINT1_STEPPER_EEPROM_ADDR  40     // double    
 
 #include "Arduino.h"
-#include "Vector.h"
 
 using namespace std;
 
@@ -25,20 +24,24 @@ extern bool return_function_state;
 extern bool homingSwitchActivated;
 extern bool limit1SwitchActivated;
 extern bool limit2SwitchActivated;
+extern volatile bool KILL_MOTION;
 
 extern unsigned long time_now_micros;
 extern unsigned long time_now_millis;
 
-extern unsigned long currentAbsPos;
+extern uint32_t currentAbsPos;
 extern double currentAbsPos_double;
-extern long currentMoveRel;
 extern volatile byte currentDirStatus;
+
 extern bool segmentExists;
 extern bool positionReached;
 extern bool unlockStepper;
+
 extern double VelocityLimitStp;
 extern double AccelerationLimitStp;
 extern double MaxPosLimitStp;
+
+enum ROT_DIR{CW, CCW};
 
 class CustomStepperOvidiusShield
 {
@@ -47,14 +50,26 @@ class CustomStepperOvidiusShield
         CustomStepperOvidiusShield(int stepID, int stepPin, int dirPin, int enblPin, int homeTriggerPin, int limitSwitchPin2, int limitSwitchPin3, int RED_LED_pin,int GREEN_LED_pin,int BLUE_LED_pin, int spr, int GEAR_FACTOR, int ft );
 
         // read EEPROM settings for stepper Motion Profiles 
-        void read_STP_EEPROM_settings( byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp);
-        void save_STP_EEPROM_settings( byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp);
+        void read_STP_EEPROM_settings(volatile byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp);
+        void save_STP_EEPROM_settings(volatile byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp);
 
         // Moves motor to home position - Hall Sensor and Limit switches Needed
-        bool setStepperHomePositionSlow(unsigned long *currentAbsPos, volatile byte *currentDirStatus,  int *stp_error);
+        bool setStepperHomePositionSlow(uint32_t *currentAbsPos, volatile byte *currentDirStatus,  volatile bool *kill_motion_triggered,  int *stp_error);
         
         // Moves motor to home position - Hall sensor only for evaluation, No Limit switches Needed - currentAbsPos is read from EEPROM
-        bool setStepperHomePositionFast(double * currentAbsPos_double, unsigned long * currentAbsPos,  byte *currentDirStatus);
+        bool setStepperHomePositionFast(double * currentAbsPos_double, uint32_t * currentAbsPos, volatile byte * currentDirStatus);
+
+        bool setStepperGoalDirection(double currentAbsPos_double, double goalAbsPos_double, volatile byte * currentDirStatus);
+
+        bool setStepperGoalPositionFixedStep(double * currentAbsPos_double, double * goalAbsPos_double, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, int *stp_error);
+
+        bool moveStp2Position(uint32_t relative_steps_2_move, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, int *stp_error);
+
+        uint32_t calculateRelativeSteps2Move(double * currentAbsPos_double, double * goalAbsPos_double);
+
+        uint32_t convertRadian2StpPulses(double position_in_radians);
+
+        double convertStpPulses2Radian(uint32_t position_in_stp_pulses);
 
     private:
         int _stepID;

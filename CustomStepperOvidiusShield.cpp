@@ -10,6 +10,9 @@
 
 using namespace std;
 
+enum ROT_DIR stepperDirRotation;
+bool return_function_state;
+
 // Constructor
 CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, int dirPin, int enblPin, int homeTriggerPin, int limitSwitchPin2, int limitSwitchPin3, int RED_LED_pin,int GREEN_LED_pin,int BLUE_LED_pin, int spr, int GEAR_FACTOR, int ft )
 {
@@ -64,7 +67,7 @@ void CustomStepperOvidiusShield::singleStepVarDelay(unsigned long delayTime) {
 
 // =========================================================================================================== //
 
-void CustomStepperOvidiusShield::read_STP_EEPROM_settings( byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
+void CustomStepperOvidiusShield::read_STP_EEPROM_settings(volatile byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
 {
 	/*
 	 *	This function is executed at setup() to read form EEPROM and Initialize the global variables of Joint1 Stepper
@@ -81,7 +84,7 @@ void CustomStepperOvidiusShield::read_STP_EEPROM_settings( byte * currentDirStat
 
 } // END FUNCTION: readEEPROMsettings
 
-void CustomStepperOvidiusShield::save_STP_EEPROM_settings(byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
+void CustomStepperOvidiusShield::save_STP_EEPROM_settings(volatile byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
 {
 	/*
 	 *	Executed before exit setup\action loops - NEVER INSIDE LOOP
@@ -105,7 +108,7 @@ void CustomStepperOvidiusShield::save_STP_EEPROM_settings(byte * currentDirStatu
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::setStepperHomePositionSlow(unsigned long *currentAbsPos, volatile byte *currentDirStatus,  int *stp_error){
+bool CustomStepperOvidiusShield::setStepperHomePositionSlow(unsigned long *currentAbsPos, volatile byte *currentDirStatus,  volatile bool *kill_motion_triggered,  int *stp_error){
 /*
  *  HOMES MOTOR - currentDirStatus changes value inside external interrupt arduino functions
  *  Returns true if error_code = 0
@@ -132,6 +135,7 @@ bool CustomStepperOvidiusShield::setStepperHomePositionSlow(unsigned long *curre
 
 if (*stp_error == 0)
 {
+  *kill_motion_triggered = false;
   return true;
 }
 else
@@ -142,10 +146,9 @@ else
 
 // =========================================================================================================== //
 
-// setStepperHomePositionFast
-bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsPos_double, unsigned long * currentAbsPos, byte * currentDirStatus){
+bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsPos_double, uint32_t * currentAbsPos, volatile byte * currentDirStatus){
 
-  unsigned long homing_stepping_delay = 500;                                // micros
+  unsigned long homing_stepping_delay = STP_HOMING_DELAY;                                // micros
 
   // 1.Read currentAbsPos_double and currentDirStatus from EEPROM
   
@@ -176,11 +179,7 @@ bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsP
   // steps motor for pre-calculated number of steps and for the period that hall pin is not triggered
   while( (motor_step <= *currentAbsPos) && (digitalRead(_homeTriggerPin) == 0 )){
           
-		  time_now_micros = micros();
-
-			digitalWrite(_stepPin, HIGH);
-    	while(micros() < time_now_micros + homing_stepping_delay){}          //wait approx. [μs]
-    	digitalWrite(_stepPin, LOW);
+      CustomStepperOvidiusShield::singleStepVarDelay(homing_stepping_delay);
 
       motor_step++;
   }
@@ -190,5 +189,176 @@ bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsP
 
 return true;
 } // END OF FUNCTION
+
+// =========================================================================================================== //
+
+bool CustomStepperOvidiusShield::setStepperGoalDirection(double currentAbsPos_double, double goalAbsPos_double, volatile byte * currentDirStatus){
+
+  // Calculate Delta_q1
+  double Delta_q1 = goalAbsPos_double - currentAbsPos_double;
+
+  if (Delta_q1 < 0 )
+  {
+    stepperDirRotation = CCW;
+    * currentDirStatus = stepperDirRotation;
+  }
+  else if (Delta_q1 > 0 )
+  {
+    stepperDirRotation = CW;
+    * currentDirStatus = stepperDirRotation;  
+  }
+  else
+  {
+    // does nothing
+  }
+  
+  
+return true;
+}
+
+// =========================================================================================================== //
+
+bool CustomStepperOvidiusShield::setStepperGoalPositionFixedStep(double * currentAbsPos_double, double * goalAbsPos_double, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered,  int *stp_error){
+  /*
+   *  Executes sequence for joint-space operation
+   */
+  
+  uint32_t relative_steps_2_move;
+
+  // Determine Direction of Rotation
+  return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(*currentAbsPos_double, *goalAbsPos_double, currentDirStatus);
+  if (return_function_state)
+  {
+    *stp_error = 0;
+  }
+  else
+  {
+    *stp_error = 1;
+  }
+  
+  // Calculate relative steps to move
+  relative_steps_2_move = CustomStepperOvidiusShield::calculateRelativeSteps2Move(currentAbsPos_double, goalAbsPos_double);
+
+  // Move Motor to goal position - kills motion if limit switch is ON!
+  return_function_state = CustomStepperOvidiusShield::moveStp2Position(relative_steps_2_move, currentDirStatus, kill_motion_triggered, stp_error);
+  if (return_function_state)
+  {
+    *stp_error = 0;
+  }
+  else
+  {
+    *stp_error = stp_error;
+  }
+  
+  if (*stp_error == 0)
+  {
+    * currentAbsPos_double = * goalAbsPos_double;
+    return true;
+  }
+  else
+  {
+    return false;
+  }  
+
+}
+
+// =========================================================================================================== //
+
+bool CustomStepperOvidiusShield::moveStp2Position(uint32_t relative_steps_2_move, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, int *stp_error)
+{
+  /*
+   *  Executes the specified number of steps
+   */
+  unsigned long fixed_stepping_delay = STP_FIXED_DELAY;
+  uint32_t STP_CNT = 0;
+
+  // Writes direction of rotation
+  digitalWrite(_dirPin, *currentDirStatus);
+
+  // executes motion
+  while ( (!(*kill_motion_triggered)) && (STP_CNT <= relative_steps_2_move))
+  {
+    STP_CNT++;
+    CustomStepperOvidiusShield::singleStepVarDelay(fixed_stepping_delay);
+    *stp_error = 555;
+  }
+
+  // if KILL_MOTION=true inside the ISR:
+  // I.  previous while exits
+  // II. and 1.stop 1sec 2. change dir. 3. move away of danger for 1000. 4. set error_code that requests homing
+  if (*kill_motion_triggered)
+  {
+    delay(1000);
+
+    digitalWrite(_dirPin, !(*currentDirStatus));
+
+    for (size_t i = 0; i < 1000; i++)
+    {
+      CustomStepperOvidiusShield::singleStepVarDelay(fixed_stepping_delay);
+    }
+    
+    *stp_error = 666;
+
+  }
+  else
+  {
+    *stp_error = 0;
+  }
+  
+  if (*stp_error == 0)
+  {
+    return true;
+  }
+  else
+  {
+    return false;
+  }  
+
+}
+
+// =========================================================================================================== //
+
+uint32_t CustomStepperOvidiusShield::calculateRelativeSteps2Move(double * currentAbsPos_double, double * goalAbsPos_double)
+{
+    double Delta_q1 = goalAbsPos_double - currentAbsPos_double;
+
+    uint32_t relative_steps_2_move = (abs(Delta_q1) * SPR1)/ (2*PI);
+}
+
+// =========================================================================================================== //
+
+uint32_t CustomStepperOvidiusShield::convertRadian2StpPulses(double position_in_radians)
+{
+    uint32_t position_in_stp_pulses;
+
+    if (position_in_radians == 0)
+    {
+        position_in_stp_pulses = 0;
+    }
+    else 
+    {
+        position_in_stp_pulses = (abs(position_in_radians) * SPR1)/ (2*PI);
+    }
+
+return position_in_stp_pulses;
+}
+  
+// =========================================================================================================== //
+
+double CustomStepperOvidiusShield::convertStpPulses2Radian(uint32_t position_in_stp_pulses)
+{
+    double position_in_radians;
+    
+    if (position_in_stp_pulses == 0)
+    {
+        position_in_radians = (double) position_in_stp_pulses;
+    }
+    else
+    {
+        position_in_radians = (double) (position_in_stp_pulses * 2 * PI) / SPR1 ;
+    }
+    
+    return position_in_radians;
+}
 
 // =========================================================================================================== //
