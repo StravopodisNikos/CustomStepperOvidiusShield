@@ -17,7 +17,7 @@
 
 using namespace std;
 
-const float pi              = 3.14159265359;
+const double pi              = 3.14159265359;
 
 extern int  stp_error;
 extern bool return_function_state;
@@ -54,20 +54,20 @@ class CustomStepperOvidiusShield
         void save_STP_EEPROM_settings(volatile byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp);
 
         // Moves motor to home position - Hall Sensor and Limit switches Needed
-        bool setStepperHomePositionSlow(uint32_t *currentAbsPos, volatile byte *currentDirStatus,  volatile bool *kill_motion_triggered,  int *stp_error);
+        bool setStepperHomePositionSlow(uint32_t *currentAbsPos, double * currentAbsPos_double, volatile byte *currentDirStatus,  volatile bool *kill_motion_triggered,  int *stp_error);
         
         // Moves motor to home position - Hall sensor only for evaluation, No Limit switches Needed - currentAbsPos is read from EEPROM
         bool setStepperHomePositionFast(double * currentAbsPos_double, uint32_t * currentAbsPos, volatile byte * currentDirStatus);
 
-        bool setStepperGoalDirection(double currentAbsPos_double, double goalAbsPos_double, volatile byte * currentDirStatus);
+        bool setStepperGoalDirection(double * currentAbsPos_double, double * goalAbsPos_double, volatile byte * currentDirStatus);
 
-        bool setStepperGoalPositionFixedStep(double * currentAbsPos_double, double * goalAbsPos_double, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, int *stp_error);
+        bool setStepperGoalPositionFixedStep(double * currentAbsPos_double, double * goalAbsPos_double, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered,  int *stp_error);
 
-        bool moveStp2Position(uint32_t relative_steps_2_move, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, int *stp_error);
+        bool moveStp2Position(uint32_t * relative_steps_2_move, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, int *stp_error);
 
-        uint32_t calculateRelativeSteps2Move(double * currentAbsPos_double, double * goalAbsPos_double);
+        uint32_t calculateRelativeSteps2Move(double * currentAbsPos_double, double * goalAbsPos_double, int *stp_error);
 
-        uint32_t convertRadian2StpPulses(double position_in_radians);
+        uint32_t convertRadian2StpPulses(double position_in_radians, int *stp_error);
 
         double convertStpPulses2Radian(uint32_t position_in_stp_pulses);
 
