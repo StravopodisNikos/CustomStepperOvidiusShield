@@ -63,13 +63,25 @@ class CustomStepperOvidiusShield
 
         bool setStepperGoalPositionFixedStep(double * currentAbsPos_double, double * goalAbsPos_double, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered,  int *stp_error);
 
+        bool testP2PexecStpParameters(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double *Ta, int *stp_error);
+
         bool moveStp2Position(uint32_t * relative_steps_2_move, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, int *stp_error);
 
         uint32_t calculateRelativeSteps2Move(double * currentAbsPos_double, double * goalAbsPos_double, int *stp_error);
 
         uint32_t convertRadian2StpPulses(double position_in_radians, int *stp_error);
 
-        double convertStpPulses2Radian(uint32_t position_in_stp_pulses);
+        double convertStpPulses2Radian(uint32_t position_in_stp_pulses, int *stp_error);
+
+        bool segmentExists_StpTrapzVelProfile(double * currentAbsPos_double, double * goalAbsPos_double,  double * Vexec, double * Aexec, bool * segmentExists, int *stp_error);
+
+        double calculateInitialStepDelay(double * Aexec);
+
+        bool returnSteps_StpTrapzVelProfile(double * currentAbsPos_double, double * goalAbsPos_double, double &Vexec, double * Aexec, double * Texec, double * Ta,  bool * segmentExists, int * stp_error, uint32_t *profile_steps);
+        
+        bool execute_StpTrapzProfile(uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, int * stp_error);
+
+        bool setStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered,  int *stp_error);
 
     private:
         int _stepID;
@@ -86,9 +98,9 @@ class CustomStepperOvidiusShield
         int _spr;
         int _GEAR_FACTOR;
         int _ft;
-        float _a;
-        float _ag;
-        float _accel_width;
+        double _a;
+        double _ag;
+        double _accel_width;
         double _step_delay_time;
         double _simultaneous_velocity;
 
