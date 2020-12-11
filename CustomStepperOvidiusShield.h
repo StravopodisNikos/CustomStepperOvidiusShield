@@ -63,7 +63,7 @@ class CustomStepperOvidiusShield
 
         bool setStepperGoalPositionFixedStep(double * currentAbsPos_double, double * goalAbsPos_double, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered,  int *stp_error);
 
-        bool testP2PexecStpParameters(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double *Ta, int *stp_error);
+        bool testP2Pparams_StpTrapzVelProfile(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double *Ta, int *stp_error);
 
         bool moveStp2Position(uint32_t * relative_steps_2_move, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, int *stp_error);
 
@@ -73,7 +73,7 @@ class CustomStepperOvidiusShield
 
         double convertStpPulses2Radian(uint32_t position_in_stp_pulses, int *stp_error);
 
-        bool segmentExists_StpTrapzVelProfile(double * currentAbsPos_double, double * goalAbsPos_double,  double * Vexec, double * Aexec, bool * segmentExists, int *stp_error);
+        bool segmentExists_StpTrapzVelProfile(double * currentAbsPos_double, double * goalAbsPos_double,  double & Vexec, double * Aexec, double & Texec, double & Ta,  bool * segmentExists, int *stp_error);
 
         double calculateInitialStepDelay(double * Aexec);
 
@@ -81,7 +81,7 @@ class CustomStepperOvidiusShield
         
         bool execute_StpTrapzProfile(uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, int * stp_error);
 
-        bool setStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered,  int *stp_error);
+        bool setStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,  int *stp_error);
 
     private:
         int _stepID;
