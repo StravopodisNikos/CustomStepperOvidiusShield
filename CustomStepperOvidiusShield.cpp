@@ -11,7 +11,9 @@
 using namespace std;
 
 enum ROT_DIR stepperDirRotation;
-bool return_function_state;
+//bool return_function_state;
+
+const double pi              = 3.14159265359;
 
 // Constructor
 CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, int dirPin, int enblPin, int homeTriggerPin, int limitSwitchPin2, int limitSwitchPin3, int RED_LED_pin,int GREEN_LED_pin,int BLUE_LED_pin, int spr, int GEAR_FACTOR, int ft )
@@ -233,6 +235,7 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionFixedStep(double * curren
    */
   
   uint32_t relative_steps_2_move;
+  bool return_function_state;
 
   // Determine Direction of Rotation
   return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
@@ -640,7 +643,7 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile(uint32_t * profile_step
 	 */
 
     const float RAMP_FACTOR       = 1;                        // Velocity Profile ramp slope factor
-    const float ETDF              = 1.50;                        // Execution Time Deviation Factor (experimental calculation)
+    const float ETDF              = 1.50;                     // Execution Time Deviation Factor (experimental calculation)
 
     // Initialize counters for Profile Execution
     long StpPresentPosition = 0;													
@@ -741,8 +744,9 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentA
   // FUN_CODE = 16* used for stp_error assignment
   /*
    * Follows flowchart of setStepperGoalPositionFixedStep but now a var step is used in each segment of motion
-   * This function can be used for synced motion with Dynamixels
+   * This function executes a Trapezoidal Velocity Profile. It can be used for synced motion with Dynamixels.
    */
+    bool return_function_state;
 
     // I . Determine Direction of Rotation
     return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
@@ -793,11 +797,10 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentA
       *stp_error = 163;
     }
 
-    double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
-    
-
     // *this fn will be removed for sync motion with dxl! The final Texec must be given to the Dxl's. Dxl setGoalPosition must be sent and then EXECUTE stepper motion
     // here for testing the stepper timing only!
+    double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
+
     return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile(profile_steps, &SEGMENT_EXISTS,  Texec,  c0, currentDirStatus, &ERROR_RETURNED);
     if (return_function_state)
     {
@@ -818,4 +821,111 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentA
       return false;
     }
     
+}
+
+// =========================================================================================================== //
+
+bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta,  volatile byte * currentDirStatus, bool * segment_exists, uint32_t * profile_steps,   int *stp_error)
+{
+  // FUN_CODE = 17* used for stp_error assignment
+  /*
+   * Follows function 16. This function IS used for synced motion with Dynamixels. To execute Stepper motion
+   * syncSetStepperGoalPositionVarStep must be called after txPacket for Dxl GP has been sent!
+   * Final Texec,Ta must be passed to calculateProfAccel_preassignedVelTexec for syncing motion with Dxls!
+   */
+    bool return_function_state;
+
+    // I . Determine Direction of Rotation
+    return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
+    if (return_function_state)
+    {
+      *stp_error = 0;
+    }
+    else
+    {
+      *stp_error = 171;
+    }
+    
+    // II . In fixed step here only the number of relative steps to move was calculated. Here the function flowchart is different:
+    // II.1 Given (currentAbsPos_double,goalAbsPos_double,Texec) from user the Vexec,Axec are calculated -> testP2Pparams_StpTrapzVelProfile -> returns: Vexec,Aexec,Texec(if changed)
+    // II.2 Given (currentAbsPos_double,goalAbsPos_double,Texec) and extracted (Vexec,Aexec,Texec')      -> segmentExists_StpTrapzVelProfile -> returns if segment exists and new Vexec,Texec(if changed)
+    // II.3 Given II.2 the conditions for the Trapezoidal Profile are evaluted -> returnSteps_StpTrapzVelProfile -> An array of the steps of each segment is returned
+    // II.4 Executes Motion with Trapezoidal Profile
+    int ERROR_RETURNED;
+    return_function_state = CustomStepperOvidiusShield::testP2Pparams_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, Vexec, Aexec, Texec, Ta, &ERROR_RETURNED);
+    if (return_function_state)
+    {
+      *stp_error = 0;
+    }
+    else
+    {
+      *stp_error = ERROR_RETURNED;
+    }
+
+    bool SEGMENT_EXISTS; 
+    return_function_state = CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double,  *Vexec, Aexec, *Texec, *Ta, &SEGMENT_EXISTS, &ERROR_RETURNED);
+    if (return_function_state)
+    {
+      *stp_error = 0;
+    }
+    else
+    {
+      *stp_error = ERROR_RETURNED;
+    }
+
+    //uint32_t PROFILE_STEPS[4];
+    return_function_state = CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, *Vexec, Aexec, Texec, Ta,  &SEGMENT_EXISTS, stp_error, profile_steps);
+    if (return_function_state)
+    {
+      *stp_error = 0;
+    }
+    else
+    {
+      *stp_error = 173;
+    }
+
+    if (*stp_error == 0)
+    {
+      return true;
+    }
+    else
+    {
+      return false;
+    }
+}
+// =========================================================================================================== //
+
+bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   int *stp_error)
+{
+  // FUN_CODE = 18* used for stp_error assignment
+
+  /*
+   * Executed after function 17 has completed. In main code, previously, syncSetDynamixelsGoalPosition must be called!
+   */
+
+  bool return_function_state;
+  int ERROR_RETURNED;
+
+  double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
+
+  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile(profile_steps, segment_exists,  Texec,  c0, currentDirStatus, &ERROR_RETURNED);
+  if (return_function_state)
+  {
+    *stp_error = 0;
+  }
+  else
+  {
+    *stp_error = ERROR_RETURNED;
+  }
+
+  if (*stp_error == 0)
+  {
+    (*currentAbsPos_double) = (*goalAbsPos_double);
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+
 }

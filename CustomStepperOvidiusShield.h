@@ -17,10 +17,8 @@
 
 using namespace std;
 
-const double pi              = 3.14159265359;
-
 extern int  stp_error;
-extern bool return_function_state;
+//extern bool return_function_state;
 extern bool homingSwitchActivated;
 extern bool limit1SwitchActivated;
 extern bool limit2SwitchActivated;
@@ -82,6 +80,10 @@ class CustomStepperOvidiusShield
         bool execute_StpTrapzProfile(uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, int * stp_error);
 
         bool setStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,  int *stp_error);
+
+        bool syncPreSetStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta,  volatile byte * currentDirStatus, bool * segment_exists, uint32_t * profile_steps,   int *stp_error);
+
+        bool syncSetStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   int *stp_error);
 
     private:
         int _stepID;
