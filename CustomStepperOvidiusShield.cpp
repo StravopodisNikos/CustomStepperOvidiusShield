@@ -69,6 +69,22 @@ void CustomStepperOvidiusShield::singleStepVarDelay(unsigned long delayTime) {
 
 // =========================================================================================================== //
 
+// multiStepVarDelay
+void CustomStepperOvidiusShield::multiStepVarDelay(unsigned long delayTime, uint32_t numSteps2Move) {
+  // Custom Stepping Function for Velocity-Acceleration Profiles
+
+  for (size_t i = 0; i < numSteps2Move; i++)
+  {
+    unsigned long time_now_micros = micros();
+    digitalWrite(_stepPin, HIGH);
+    while(micros() < time_now_micros + delayTime){}                   //wait approx. [μs]
+    digitalWrite(_stepPin, LOW);
+  }
+
+} // END function multiStepVarDelay
+
+// =========================================================================================================== //
+
 void CustomStepperOvidiusShield::read_STP_EEPROM_settings(volatile byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
 {
 	/*
@@ -120,15 +136,24 @@ bool CustomStepperOvidiusShield::setStepperHomePositionSlow(uint32_t *currentAbs
  */
 
   unsigned long homing_stepping_delay = STP_HOMING_DELAY;
-  
+  uint32_t breakFreeSteps             = BREAK_FREE_STEPS;
+
   *stp_error = 1;                             
   int times_limit_hall_activated = 0;
 
-  while( (digitalRead(_homeTriggerPin)) )
-  {   
-      //move motor
-      digitalWrite(_dirPin, *currentDirStatus);
+  digitalWrite(_dirPin, *currentDirStatus);       // start moving with the pre-existing direction value
 
+  while( (digitalRead(_homeTriggerPin)) )         // move motor
+  {         
+      if (*kill_motion_triggered == true)
+      {
+        digitalWrite(_dirPin, *currentDirStatus); // change direction, since the currentDirStatus value was changed inside ISR function
+        
+        CustomStepperOvidiusShield::multiStepVarDelay(homing_stepping_delay, breakFreeSteps); // break free from magnetic field
+
+        *kill_motion_triggered = false; // set the volatile value back to false
+      }
+      
       CustomStepperOvidiusShield::singleStepVarDelay(homing_stepping_delay);                  
 
       // Everything worked
@@ -141,7 +166,7 @@ bool CustomStepperOvidiusShield::setStepperHomePositionSlow(uint32_t *currentAbs
 
 if (*stp_error == 0)
 {
-  *kill_motion_triggered = false;
+  
   return true;
 }
 else
@@ -152,49 +177,91 @@ else
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsPos_double, uint32_t * currentAbsPos, volatile byte * currentDirStatus){
+bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsPos_double, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool * kill_motion_triggered,  int * stp_error){
 	// *	FUN_CODE = 4 used for stp_error assignment, each error is given the value: 1*... for example: 11, 12, 13
-
+  
+  bool return_function_state;
   unsigned long homing_stepping_delay = STP_HOMING_DELAY;                                // micros
+  uint32_t relative_steps_2_move;
+  uint32_t breakFreeSteps             = BREAK_FREE_STEPS;
 
   // 1.Read currentAbsPos_double and currentDirStatus from EEPROM
   
   //float currentAbsPos_double = 0.00f;
-
   EEPROM.get(CP_JOINT1_STEPPER_EEPROM_ADDR, *currentAbsPos_double);    			// @setup OR after every Action Task finishes: float f = 123.456f; EEPROM.put(eeAddress, f);
-  *currentAbsPos = abs( 	round( *currentAbsPos_double / _ag)    );
   *currentDirStatus = EEPROM.read(CD_JOINT1_STEPPER_EEPROM_ADDR);
   
   // 2.Calculate relative steps
-  // Relative steps for homing is the absolute number of steps calculated
-
-  // 3.  Define direction of motion
-  if ( *currentAbsPos_double >= 0)
+  double goalAbsPos_double = 0;
+  relative_steps_2_move = CustomStepperOvidiusShield::calculateRelativeSteps2Move(currentAbsPos_double, &goalAbsPos_double, stp_error);
+  *relative_movement_in_steps = relative_steps_2_move;
+  if (*stp_error == 92)
   {
-    *currentDirStatus = LOW;						// move CCW
+    *stp_error = 492;
+  }
+  else if (*stp_error == 91)
+  {
+    *stp_error = 491;
   }
   else
   {
-    *currentDirStatus = HIGH;						// move CW
+    *stp_error = 0;
+  }
+
+  return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, &goalAbsPos_double, currentDirStatus);
+  if (return_function_state)
+  {
+    *stp_error = 0;
+  }
+  else
+  {
+    *stp_error = 41;
+  }
+/*
+  // 3.  Define direction of motion
+  if ( *currentAbsPos_double >= 0)
+  {
+    *currentDirStatus = CCW;						// move CCW
+  }
+  else
+  {
+    *currentDirStatus = CW;						// move CW
   }
   
   digitalWrite(_dirPin, *currentDirStatus);
+*/
 
   // 4. execute homing  
-
   int motor_step = 0;
   // steps motor for pre-calculated number of steps and for the period that hall pin is not triggered
-  while( (motor_step <= *currentAbsPos) && (digitalRead(_homeTriggerPin) == 0 )){
+  while( (motor_step <= *relative_movement_in_steps) && (digitalRead(_homeTriggerPin) )) {
           
       CustomStepperOvidiusShield::singleStepVarDelay(homing_stepping_delay);
 
       motor_step++;
+
+      if (*kill_motion_triggered == true)
+      {
+        digitalWrite(_dirPin, *currentDirStatus); // change direction, since the currentDirStatus value was changed inside ISR function
+        
+        CustomStepperOvidiusShield::multiStepVarDelay(homing_stepping_delay, breakFreeSteps); // break free from magnetic field
+
+        *kill_motion_triggered = false; // set the volatile value back to false
+      }
+
+      *stp_error == 0;
   }
 
   // 5. sets global variable to new position(HOME) value
-  *currentAbsPos = 0; 
-
-return true;
+  if (*stp_error == 0)
+  {
+    (*currentAbsPos_double) = goalAbsPos_double;
+    return true;
+  }
+  else
+  {
+    return false;
+  } 
 } // END OF FUNCTION
 
 // =========================================================================================================== //

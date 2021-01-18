@@ -55,7 +55,7 @@ class CustomStepperOvidiusShield
         bool setStepperHomePositionSlow(uint32_t *currentAbsPos, double * currentAbsPos_double, volatile byte *currentDirStatus,  volatile bool *kill_motion_triggered,  int *stp_error);
         
         // Moves motor to home position - Hall sensor only for evaluation, No Limit switches Needed - currentAbsPos is read from EEPROM
-        bool setStepperHomePositionFast(double * currentAbsPos_double, uint32_t * currentAbsPos, volatile byte * currentDirStatus);
+        bool setStepperHomePositionFast(double * currentAbsPos_double, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool * kill_motion_triggered,  int * stp_error);
 
         bool setStepperGoalDirection(double * currentAbsPos_double, double * goalAbsPos_double, volatile byte * currentDirStatus);
 
@@ -107,6 +107,8 @@ class CustomStepperOvidiusShield
         double _simultaneous_velocity;
 
         void singleStepVarDelay(unsigned long delayTime);
+
+        void multiStepVarDelay(unsigned long delayTime, uint32_t numSteps2Move);
 
 };
 
