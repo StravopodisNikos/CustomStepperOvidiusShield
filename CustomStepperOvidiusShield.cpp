@@ -51,7 +51,7 @@ CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, 
 
     _a              = ( 2 * pi ) / (  _spr );               // Stepper Motor Step Angle(Angular Position of Motor shaft)[rad]
     _ag             = ( 2 * pi ) / ( _GEAR_FACTOR * _spr ); // Geared Motor Step Angle(Angular Position of Output shaft of Gearbox )[rad]
-    _accel_width    = 0.20;                                 // Acceleration Phase width
+    _accel_width    = 1 / ACCEL_WIDTH_DENOM;                                 // Acceleration Phase width
 
 }
 
@@ -128,7 +128,7 @@ void CustomStepperOvidiusShield::save_STP_EEPROM_settings(volatile byte * curren
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::setStepperHomePositionSlow(uint32_t *currentAbsPos, double * currentAbsPos_double, volatile byte *currentDirStatus,  volatile bool *kill_motion_triggered,  int *stp_error){
+bool CustomStepperOvidiusShield::setStepperHomePositionSlow(double * currentAbsPos_double, volatile byte *currentDirStatus,  volatile bool *kill_motion_triggered,  int *stp_error){
 /*
  *	FUN_CODE = 3 used for stp_error assignment, each error is given the value: 1*... for example: 11, 12, 13
  *  HOMES MOTOR - currentDirStatus changes value inside external interrupt arduino functions
@@ -161,7 +161,6 @@ bool CustomStepperOvidiusShield::setStepperHomePositionSlow(uint32_t *currentAbs
   }
 
   // sets global variable to new position(HOME) value
-  *currentAbsPos = 0; 
   *currentAbsPos_double = 0;
 
 if (*stp_error == 0)
@@ -177,7 +176,7 @@ else
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsPos_double, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool * kill_motion_triggered,  int * stp_error){
+bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsPos_double, volatile byte * currentDirStatus, volatile bool * kill_motion_triggered,  int * stp_error){
 	// *	FUN_CODE = 4 used for stp_error assignment, each error is given the value: 1*... for example: 11, 12, 13
   
   bool return_function_state;
@@ -194,7 +193,6 @@ bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsP
   // 2.Calculate relative steps
   double goalAbsPos_double = 0;
   relative_steps_2_move = CustomStepperOvidiusShield::calculateRelativeSteps2Move(currentAbsPos_double, &goalAbsPos_double, stp_error);
-  *relative_movement_in_steps = relative_steps_2_move;
   if (*stp_error == 92)
   {
     *stp_error = 492;
@@ -208,6 +206,7 @@ bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsP
     *stp_error = 0;
   }
 
+  // 3.  Define direction of motion
   return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, &goalAbsPos_double, currentDirStatus);
   if (return_function_state)
   {
@@ -217,24 +216,11 @@ bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsP
   {
     *stp_error = 41;
   }
-/*
-  // 3.  Define direction of motion
-  if ( *currentAbsPos_double >= 0)
-  {
-    *currentDirStatus = CCW;						// move CCW
-  }
-  else
-  {
-    *currentDirStatus = CW;						// move CW
-  }
-  
-  digitalWrite(_dirPin, *currentDirStatus);
-*/
 
   // 4. execute homing  
   int motor_step = 0;
   // steps motor for pre-calculated number of steps and for the period that hall pin is not triggered
-  while( (motor_step <= *relative_movement_in_steps) && (digitalRead(_homeTriggerPin) )) {
+  while( (motor_step <= relative_steps_2_move) && (digitalRead(_homeTriggerPin) )) {
           
       CustomStepperOvidiusShield::singleStepVarDelay(homing_stepping_delay);
 
@@ -484,7 +470,7 @@ uint32_t CustomStepperOvidiusShield::calculateRelativeSteps2Move(double * curren
 {
     // FUN_CODE = 9 used for stp_error assignment
 
-    double Delta_q1_double = (*goalAbsPos_double) - (*currentAbsPos_double);
+    double Delta_q1_double = abs( (*goalAbsPos_double) - (*currentAbsPos_double) );
 
     int ERROR_RETURNED;
 
@@ -524,7 +510,7 @@ uint32_t CustomStepperOvidiusShield::convertRadian2StpPulses(double position_in_
     else 
     {
         // _ag = ( 2 * pi ) / ( _GEAR_FACTOR * _spr )
-        position_in_stp_pulses = (uint32_t) (abs(position_in_radians) * GEAR_FACTOR_PLANETARY * SPR1) / (2*pi);
+        position_in_stp_pulses = (uint32_t) ( (abs(position_in_radians) * GEAR_FACTOR_PLANETARY * SPR1) / (2*pi) );
         //position_in_stp_pulses = (uint32_t) abs(position_in_radians) / _ag;
         *stp_error = 102;
     }
@@ -546,7 +532,7 @@ double CustomStepperOvidiusShield::convertStpPulses2Radian(uint32_t position_in_
     }
     else
     {   // _ag = ( 2 * pi ) / ( _GEAR_FACTOR * _spr )
-        position_in_radians = (double) (position_in_stp_pulses * 2 * pi) / (SPR1 * GEAR_FACTOR_PLANETARY);
+        position_in_radians = (double) ( (position_in_stp_pulses * 2 * pi) / (SPR1 * GEAR_FACTOR_PLANETARY) );
         //position_in_radians = (double) (position_in_stp_pulses) * _ag;
         *stp_error = 112;
     }
@@ -600,6 +586,48 @@ bool CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile(double * curre
 
 // =========================================================================================================== //
 
+bool CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile2(double * currentAbsPos_double, double * goalAbsPos_double,  double & Vexec, double * Aexec, double & Texec, double & Ta,  bool * segmentExists, int *stp_error){
+
+  // FUN_CODE = __ used for stp_error assignment
+  /*
+   *  Based on segmentExists_StpTrapzVelProfile2 BUT here calculateProfVelAccel_preassignedVelTexec3 was used in p2pcsp2.ino file
+   */
+
+  double Delta_q1_double = abs( *goalAbsPos_double - *currentAbsPos_double );	// [rad]
+
+  double h_cond = abs( pow((Vexec),2.0) / (*Aexec) );				        // Condition factor for linear segment existence in Trapezoidal Velocity Profile
+
+  if( Delta_q1_double >= h_cond)
+  {
+      *stp_error = 121;
+      (*segmentExists) = true;
+  }
+  else
+  {
+      Vexec = (*Aexec) * Ta;
+
+      *stp_error = 122;
+      (*segmentExists) = false;
+  }
+
+  if (*stp_error==121)
+  {
+    return true;
+  }
+  else if (*stp_error==122)
+  {
+    return true;
+  }
+  else
+  {
+    *stp_error = 123;
+    return false;
+  }
+  
+}
+
+// =========================================================================================================== //
+
 double CustomStepperOvidiusShield::calculateInitialStepDelay(double * Aexec)
 {
   // FUN_CODE = 13* used for stp_error assignment
@@ -623,7 +651,8 @@ bool CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(double * current
 
     int ERROR_RETURNED;
     uint32_t relative_steps_2_move;
-    double Delta_q1_accel_double,Delta_q1_lin_seg_double;
+    double Delta_q1_accel_double;
+    double Delta_q1_lin_seg_double;
     uint32_t nmov_Ta,nmov_Td,nmov_linseg;
 
     // first calculate the relative steps of all motion
@@ -649,12 +678,13 @@ bool CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(double * current
         // Determine Profile Step Variables based on Melchiorri
         Delta_q1_accel_double   = 0.5 * (*Aexec) * pow((*Ta),2.0);                                                        // eq.3.9.1 Melchiorri p.66
         
-        Delta_q1_lin_seg_double = (*Aexec) * _accel_width * pow((*Texec),2.0) * ( 1 - 2 * _accel_width);                  // eq.3.9.2 Melchiorri p.66
-        
+        // Returns junk value, I will use the simplest form Ta=Td
+        //Delta_q1_lin_seg_double = (*Aexec) * _accel_width * pow((*Texec),2.0) * ( 1 - 2 * _accel_width);                  // eq.3.9.2 Melchiorri p.66
+
         nmov_Ta     = CustomStepperOvidiusShield::convertRadian2StpPulses(Delta_q1_accel_double, &ERROR_RETURNED);        // Steps of Acceleration Phase; 
-        nmov_linseg = CustomStepperOvidiusShield::convertRadian2StpPulses(Delta_q1_lin_seg_double, &ERROR_RETURNED);      // Steps of liner segment                                                               
-        nmov_Td     = relative_steps_2_move - ( nmov_Ta + nmov_linseg ) ;									                                // Steps of Decceleration Phase; 
-        *stp_error = 144;
+        nmov_linseg = relative_steps_2_move - 2 *  nmov_Ta;                                                             
+        nmov_Td     = nmov_Ta;
+        *stp_error = ERROR_RETURNED;
     }
     else
     {
@@ -665,11 +695,9 @@ bool CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(double * current
         nmov_linseg  = 0;
         nmov_Td      = relative_steps_2_move - nmov_Ta ;                                                                   // Steps of Decceleration Phase;   
         
-        *stp_error = 145;
+        *stp_error = ERROR_RETURNED; 
     }
     
-    *stp_error = ERROR_RETURNED;
-
     if (*stp_error==91)
     {
       *stp_error = 146;
@@ -913,7 +941,7 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep(double * c
       *stp_error = 171;
     }
     
-    // II . In fixed step here only the number of relative steps to move was calculated. Here the function flowchart is different:
+    // II . In fixed step only the number of relative steps to move was calculated. Here the function flowchart is different:
     // II.1 Given (currentAbsPos_double,goalAbsPos_double,Texec) from user the Vexec,Axec are calculated -> testP2Pparams_StpTrapzVelProfile -> returns: Vexec,Aexec,Texec(if changed)
     // II.2 Given (currentAbsPos_double,goalAbsPos_double,Texec) and extracted (Vexec,Aexec,Texec')      -> segmentExists_StpTrapzVelProfile -> returns if segment exists and new Vexec,Texec(if changed)
     // II.3 Given II.2 the conditions for the Trapezoidal Profile are evaluted -> returnSteps_StpTrapzVelProfile -> An array of the steps of each segment is returned
@@ -941,6 +969,59 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep(double * c
     }
 
     //uint32_t PROFILE_STEPS[4];
+    return_function_state = CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, *Vexec, Aexec, Texec, Ta,  &SEGMENT_EXISTS, stp_error, profile_steps);
+    if (return_function_state)
+    {
+      *stp_error = 0;
+    }
+    else
+    {
+      *stp_error = 173;
+    }
+
+    if (*stp_error == 0)
+    {
+      return true;
+    }
+    else
+    {
+      return false;
+    }
+}
+// =========================================================================================================== //
+
+bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep2(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta,  volatile byte * currentDirStatus, bool * segment_exists, uint32_t * profile_steps,   int *stp_error)
+{
+  // FUN_CODE = __* used for stp_error assignment
+  /*
+   *  Written for p2pcsp2.ino. Based on syncPreSetStepperGoalPositionVarStep BUT here calculateProfVelAccel_preassignedVelTexec3 is used for (Vexec,Axec,Texec)
+   */
+    bool return_function_state;
+    int ERROR_RETURNED;
+    
+    // I . Determine Direction of Rotation
+    return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
+    if (return_function_state)
+    {
+      *stp_error = 0;
+    }
+    else
+    {
+      *stp_error = 171;
+    }
+ 
+    bool SEGMENT_EXISTS; 
+    return_function_state = CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile2(currentAbsPos_double, goalAbsPos_double,  *Vexec, Aexec, *Texec, *Ta, &SEGMENT_EXISTS, &ERROR_RETURNED);
+    if (return_function_state)
+    {
+      *stp_error = 0;
+      (*segment_exists) = (&SEGMENT_EXISTS);  // in order to access in main ino file
+    }
+    else
+    {
+      *stp_error = ERROR_RETURNED;
+    }
+
     return_function_state = CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, *Vexec, Aexec, Texec, Ta,  &SEGMENT_EXISTS, stp_error, profile_steps);
     if (return_function_state)
     {

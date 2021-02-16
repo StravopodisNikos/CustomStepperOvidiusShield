@@ -1,0 +1,25 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "/home/nikos/Downloads/arduino-1.8.13/tools/**",
+                "/home/nikos/Arduino/libraries/**",
+                "/home/nikos/Downloads/arduino-1.8.13/libraries/**",
+                "/home/nikos/Downloads/arduino-1.8.13/hardware/tools/**",
+                "/home/nikos/Downloads/arduino-1.8.13/hardware/arduino/avr/**"
+            ],
+            "forcedInclude": [
+                "/home/nikos/Downloads/arduino-1.8.13/hardware/arduino/avr/cores/arduino/Arduino.h"
+            ],
+            "defines": [
+                "USBCON"
+            ],
+            "intelliSenseMode": "linux-gcc-x64",
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "gnu11",
+            "cppStandard": "gnu++14"
+        }
+    ],
+    "version": 4
+}
