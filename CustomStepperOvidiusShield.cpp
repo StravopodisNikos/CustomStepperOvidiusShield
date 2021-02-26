@@ -53,6 +53,8 @@ CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, 
     _ag             = ( 2 * pi ) / ( _GEAR_FACTOR * _spr ); // Geared Motor Step Angle(Angular Position of Output shaft of Gearbox )[rad]
     _accel_width    = 1 / ACCEL_WIDTH_DENOM;                                 // Acceleration Phase width
 
+    _STEP_PIN_STATE = HIGH;
+    _last_STEP_STATE_update = 0;
 }
 
 // =========================================================================================================== //
@@ -67,6 +69,86 @@ void CustomStepperOvidiusShield::singleStepVarDelay(unsigned long delayTime) {
     digitalWrite(_stepPin, LOW);
 } // END function singleStepVarDelay
 
+// =========================================================================================================== //
+
+// updateSingleStepVarDelay
+void CustomStepperOvidiusShield::updateSingleStepVarDelay(unsigned long delayTime, long * StpPresentPosition, bool * updateDelayTime) {
+  // Stepping Function to implement Velocity-Acceleration Profiles using
+  // state machine multitasking - Here no pausing inside stepping occurs!
+
+    _update_STEP_STATE_interval = delayTime;
+    if (micros() - _last_STEP_STATE_update > _update_STEP_STATE_interval)
+    {
+      digitalWrite(_stepPin, !_STEP_PIN_STATE);
+
+      _last_STEP_STATE_update = micros();
+
+      _STEP_PIN_STATE = !_STEP_PIN_STATE;
+
+      (*StpPresentPosition)++;  
+
+      *updateDelayTime = true;
+    }
+    else
+    {
+      *StpPresentPosition = *StpPresentPosition;
+
+      *updateDelayTime = false;
+    }
+    
+} 
+
+// =========================================================================================================== //
+
+void CustomStepperOvidiusShield::updateDelayTime(double * delayTime_sec, double * prev_delayTime_sec, long * StpPresentPosition, bool * segment_exists, uint32_t * profile_steps, int *stp_error)
+{
+    // This function is executed only if updateSingleStepVarDelay sets the corresponding flag to true
+    // New delay time calculated in [sec] is returned with "delayTime_sec"
+
+    const float RAMP_FACTOR       = 1.0;                        // Velocity Profile ramp slope factor
+
+    // Initialize counters for Profile Execution
+    double rest = 0;
+    long accel_count = 0; 
+    long ctVel_count = 0;
+    long decel_count = -profile_steps[3]; 
+
+    if((*segment_exists))                                                                                                     // Linear Segment exists
+    {
+          if(*StpPresentPosition < profile_steps[1]){
+            accel_count++;                                                                                                  // Acceleration Phase: delta_t -> minimizes
+            *delayTime_sec =  *prev_delayTime_sec - RAMP_FACTOR * ( (2*(*delayTime_sec)+rest)/(4*accel_count+1) );                                  // c_n [sec]
+          }else if( (*StpPresentPosition > profile_steps[1]) && (*StpPresentPosition < profile_steps[1]+profile_steps[2]) )   // Linear Segment: delta_t -> constant
+          {
+            ctVel_count++;
+            (*delayTime_sec) = (*prev_delayTime_sec);  
+          }
+          else
+          {
+            decel_count++;                                                                        
+            (*delayTime_sec) =  (*prev_delayTime_sec) - RAMP_FACTOR * ( (2*(*delayTime_sec)+rest)/(4*decel_count+1) );                                // Deceleration Phase: delta_t -> maximizes [sec] 
+          }
+          *stp_error = 151;
+    }
+    else
+    {                                                                                             // Linear Segment doesn't exist
+          if(*StpPresentPosition < profile_steps[1])                                               // Acceleration Phase: delta_t -> minimizes
+          {
+            accel_count++;
+            (*delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*delayTime_sec)+rest)/(4*accel_count+1) );          // c_n [sec]
+          }                                   
+          else
+          {                                                                                       // Deceleration Phase: delta_t -> maximizes
+            decel_count++;                                                                        // Negative Value!
+            (*delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*delayTime_sec)+rest)/(4*decel_count+1) );          // Deceleration Phase: delta_t -> maximizes [sec] 
+          }
+          *stp_error = 152;                                                                       
+    }
+
+  //Serial.print("delayTime_sec in updateDelayTime = "); Serial.println(*delayTime_sec,6);
+
+  (*prev_delayTime_sec) = (*delayTime_sec);
+}
 // =========================================================================================================== //
 
 // multiStepVarDelay
@@ -834,6 +916,76 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile(uint32_t * profile_step
 
 // =========================================================================================================== //
 
+bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, int * stp_error)
+{
+	/*
+   * Same as execute_StpTrapzProfile, but CAN BE USED FOR STATE MACHINE ONLY!
+	 */
+
+    const float ETDF              = 1.50;                     // Execution Time Deviation Factor (experimental calculation)
+
+    // Initialize variable for timing/derivative calculations
+    unsigned long time_duration;
+    double time_duration_double;
+    double prev_delta_t = delta_t; 
+    double new_delta_t;                                       // Delay time in [sec] - Here the initial value is given, will change inside loop
+    unsigned long new_delta_t_micros;                         // Delay time in [micros]
+    unsigned long motor_movement_start = millis();
+
+    long StpPresentPosition = 0;
+    bool updateDelayTime = true;                              // the delay time MUST BE CALCULATED in first do-while iteration
+
+    uint32_t total_steps = 2*profile_steps[0];                // because updateSingleStepVarDelay produces only half step pulse
+
+    Serial.print("Total steps to move = "); Serial.println(total_steps);
+    delay(1000);
+
+    // Stepping loop
+    do
+    {
+    		// Update delay time
+        if (updateDelayTime == true)
+        {
+          CustomStepperOvidiusShield::updateDelayTime(&new_delta_t, &prev_delta_t, &StpPresentPosition, segmentExists, profile_steps, stp_error);
+        }
+        new_delta_t_micros = (new_delta_t*1000000);
+        Serial.print("new_delta_t_micros = "); Serial.println(new_delta_t_micros);
+
+        // send step pulse unsigned long delayTime, long & StpPresentPosition, bool & updateDelayTime
+        CustomStepperOvidiusShield::updateSingleStepVarDelay(new_delta_t_micros, &StpPresentPosition, &updateDelayTime);  // Updates Motor Step 
+        
+        time_duration = millis() - motor_movement_start;                                              // Calculates Stepper Motion Execution Time 
+        
+        Serial.print("StpPresentPosition = "); Serial.println(StpPresentPosition);
+
+    }while(  (total_steps - StpPresentPosition) != 0 );
+
+    time_duration_double = time_duration / 1000.0;
+
+    if ( time_duration_double <= ( ETDF * (*Texec)) ) // if synced motion was successful
+    {
+      *Texec = time_duration_double;
+      *stp_error = 0;
+    }
+    else
+    {
+      *Texec = time_duration_double;
+      *stp_error = 154;
+    }
+
+    if (*stp_error == 0)
+    {
+      return true;
+    }
+    else
+    {
+      return false;
+    }
+
+} // END OF FUNCTION
+
+// =========================================================================================================== //
+
 bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta,  volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   int *stp_error)
 {
   // FUN_CODE = 16* used for stp_error assignment
@@ -1057,6 +1209,42 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep(double * curr
   double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
 
   return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile(profile_steps, segment_exists,  Texec,  c0, currentDirStatus, &ERROR_RETURNED);
+  if (return_function_state)
+  {
+    *stp_error = 0;
+  }
+  else
+  {
+    *stp_error = ERROR_RETURNED;
+  }
+
+  if (*stp_error == 0)
+  {
+    (*currentAbsPos_double) = (*goalAbsPos_double);
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+
+}
+
+bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   int *stp_error)
+{
+  // FUN_CODE = 18* used for stp_error assignment
+
+  /*
+   * Same as syncSetStepperGoalPositionVarStep, but here execute_StpTrapzProfile2 is executed
+   * This implements state machine logic for stepping!
+   */
+
+  bool return_function_state;
+  int ERROR_RETURNED;
+
+  double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
+
+  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile2(profile_steps, segment_exists,  Texec,  c0, currentDirStatus, &ERROR_RETURNED);
   if (return_function_state)
   {
     *stp_error = 0;
