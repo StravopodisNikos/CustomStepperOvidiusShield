@@ -139,7 +139,7 @@ void CustomStepperOvidiusShield::updateDelayTime(double * new_delayTime_sec, dou
       {
         _accel_count++;                                                                                                       // Acceleration Phase: delta_t -> minimizes
         //Serial.print("EXISTS : ACCEL PHASE"); Serial.println(_accel_count);
-        (*new_delayTime_sec) =  *prev_delayTime_sec - RAMP_FACTOR * ( (2*(*new_delayTime_sec)+rest)/(4*_accel_count+1) );                                  // c_n [sec]
+        (*new_delayTime_sec) =  *prev_delayTime_sec - RAMP_FACTOR * ( (2*(*new_delayTime_sec)+rest)/(4*_accel_count+1) );     // c_n [sec]
       }
       else if( (StpPresentPosition > profile_steps[1]) && (StpPresentPosition < profile_steps[1]+profile_steps[2]) )          // Linear Segment: delta_t -> constant
       {
@@ -151,23 +151,23 @@ void CustomStepperOvidiusShield::updateDelayTime(double * new_delayTime_sec, dou
       {
         _decel_count++; 
         //Serial.print("EXISTS : DECEL PHASE"); Serial.println(_decel_count);                                                                           
-        (*new_delayTime_sec) =  (*prev_delayTime_sec) - RAMP_FACTOR * ( (2*(*new_delayTime_sec)+rest)/(4*_decel_count+1) );                                // Deceleration Phase: delta_t -> maximizes [sec] 
+        (*new_delayTime_sec) =  (*prev_delayTime_sec) - RAMP_FACTOR * ( (2*(*new_delayTime_sec)+rest)/(4*_decel_count+1) );    // Deceleration Phase: delta_t -> maximizes [sec] 
       }
       *stp_error = 151;
     }
     else
-{                                                                                             // Linear Segment doesn't exist
-      if(StpPresentPosition < profile_steps[1])                                               // Acceleration Phase: delta_t -> minimizes
+{                                                                                                                               // Linear Segment doesn't exist
+      if(StpPresentPosition < profile_steps[1])                                                                                 // Acceleration Phase: delta_t -> minimizes
       {
         _accel_count++;
         //Serial.print("NOT EXISTS : ACCEL PHASE"); Serial.println(_accel_count);
-        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*new_delayTime_sec)+rest)/(4*_accel_count+1) );          // c_n [sec]
+        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*new_delayTime_sec)+rest)/(4*_accel_count+1) );       // c_n [sec]
       }                                   
       else
-      {                                                                                       // Deceleration Phase: delta_t -> maximizes
-        _decel_count++;                                                                       // Negative Value!
+    {                                                                                                                           // Deceleration Phase: delta_t -> maximizes
+        _decel_count++;                                                                                                         // Negative Value!
         //Serial.print("NOT EXISTS : DECEL PHASE"); Serial.println(_decel_count); 
-        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*new_delayTime_sec)+rest)/(4*_decel_count+1) );          // Deceleration Phase: delta_t -> maximizes [sec] 
+        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*new_delayTime_sec)+rest)/(4*_decel_count+1) );       // Deceleration Phase: delta_t -> maximizes [sec] 
       }
       *stp_error = 152;                                                                       
     }
@@ -179,27 +179,37 @@ void CustomStepperOvidiusShield::updateDelayTime(double * new_delayTime_sec, dou
   (*new_delayTime_sec) = (*new_delayTime_sec) / 2.0 ;       // Because half step pulse is generated each time!
 }
 // =========================================================================================================== //
-void CustomStepperOvidiusShield::updateForceMeasurements(sensors::force3axis * ptr2ForceSensor, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type * force_error)
+void CustomStepperOvidiusShield::updateForceMeasurements(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type * force_error)
 {
   // this function is executed inside execute_StpTrapzProfile2 if user sets flag to true at method call
   // Updates force measurements while motor is stepping applying state machine multitasking. The force 
   // sensor must have been calibrated BEFORE CALLING this function. (setupForceSensor of OvidiusSensors)
   // must have been called at setup().
 
-    ForceSensor = ptr2ForceSensor;
+    //ForceSensor = ptr2ForceSensor;
 
     if (millis() - _last_FORCE_update > _update_FORCE_interval)
     {
-      for (size_t i = 0; i < num_FORCE_SENSORS; i++)
-      {
-        _return_fn_state =  ForceSensor[i].measureForceKilos(&(ForceSensor->ForceSensorAxis), (UPDATED_FORCE_MEASUREMENTS_KGS+i), *force_error);
+      //for (size_t i = 0; i < 1; i++)
+      //{
+        //_return_fn_state =  ForceSensor[i].measureForceKilos(&(ForceSensor->ForceSensorAxis), (UPDATED_FORCE_MEASUREMENTS_KGS+i), *force_error);
+        //_return_fn_state =  ForceSensor->measureForceKilos(&ptr2ForceSensor->ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error);
+        _return_fn_state = ptr2ForceSensor->measureForceKilos(ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error);
+
+        _last_FORCE_update = millis();
+        /*
         if (_return_fn_state)
         {
           Serial.println("MEASURED FORCE");
+          Serial.print("MEASUREMENT = "); Serial.println(*UPDATED_FORCE_MEASUREMENTS_KGS);
         }
-        
-      }
-      _last_FORCE_update = millis();
+        else
+        {
+          Serial.println("NOT MEASURED FORCE"); Serial.print("FORCE ERROR = "); Serial.println(*force_error);
+          Serial.print("MEASUREMENT = "); Serial.println(*UPDATED_FORCE_MEASUREMENTS_KGS);
+        }
+        */
+      //}
     }   
 
 }
@@ -973,14 +983,16 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile(uint32_t * profile_step
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * ptr2ForceSensor, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type *force_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error)
+bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type *force_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error)
 {
 	/*
    * Same as execute_StpTrapzProfile, but is USED FOR STATE MACHINE ONLY!
 	 */
 
     // Vars for force measurements
-    ptr2ForceSensor = ForceSensor;
+    //ptr2ForceSensor = ForceSensor;
+    unsigned long force_update_duration;
+    unsigned long started_force_update;
 
     const float ETDF              = 1.50;                     // Execution Time Deviation Factor (experimental calculation)
 
@@ -1015,37 +1027,39 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * 
     unsigned long motor_movement_start = millis();
     do
     {
-    		// Update delay time
+    		// Inside this if every desired update() function must be called
         if (updateDelayTime == true)
         {
+          // 1. Always update delay time when stepper has changed state!
           CustomStepperOvidiusShield::updateDelayTime(&new_delta_t, &prev_delta_t, StpPresentPosition, segmentExists, profile_steps_new, stp_error);
           //Serial.println("delay time updated");
+
+          // 2. Updates force sensor values -> talks to HX711 using OvidiusSensors methods
+          if (UPDATE_FORCE)
+          {
+            //Serial.println("MPHKA UPDATE FORCE");
+            started_force_update = micros();
+            updateForceMeasurements(ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error);
+            force_update_duration = micros() - started_force_update;
+            //Serial.print("UPDATED_FORCE_MEASUREMENTS_KGS = "); Serial.println(*UPDATED_FORCE_MEASUREMENTS_KGS);
+          }
+          
+          // 4. updates IMU values
+          if (UPDATE_IMU)
+          {
+            /* code */
+          }
+          
+          // 5. data logs
+
         }
         new_delta_t_micros = (new_delta_t*1000000);
-        //Serial.print("new_delta_t_micros = "); Serial.println(new_delta_t_micros);
 
         // send step pulse unsigned long delayTime, long & StpPresentPosition, bool & updateDelayTime
         CustomStepperOvidiusShield::updateSingleStepVarDelay(new_delta_t_micros, &StpPresentPosition, &updateDelayTime);  // Updates Motor Step 
         
-        // NEXT TO BE IMPLEMENTED INSIDE LOOP:
-
-        // 1. updates force sensor values -> talks to HX711 using OvidiusSensors methods
-        if (UPDATE_FORCE)
-        {
-          updateForceMeasurements(ptr2ForceSensor, UPDATED_FORCE_MEASUREMENTS_KGS, force_error);
-        }
-        
-        // 2. updates IMU values
-        if (UPDATE_IMU)
-        {
-          /* code */
-        }
-        
-        // 3. calculates angular velocity
-
-        // 4. data logs
-
         //Serial.print("StpPresentPosition = "); Serial.println(StpPresentPosition);
+        //Serial.print("force_update_duration = "); Serial.println(force_update_duration);
     }while(  (profile_steps_new[0] - StpPresentPosition) != 0 );
 
     time_duration = millis() - motor_movement_start;    // Calculates Stepper Motion Execution Time 
@@ -1320,7 +1334,7 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep(double * curr
 
 }
 
-bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(sensors::force3axis * ptr2ForceSensor, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps,   int *stp_error)
+bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps,   int *stp_error)
 {
   // FUN_CODE = 18* used for stp_error assignment
 
@@ -1328,14 +1342,14 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(sensors::for
    * Same as syncSetStepperGoalPositionVarStep, but here execute_StpTrapzProfile2 is executed
    * This implements state machine logic for stepping!
    */
-  ptr2ForceSensor = ForceSensor;
+  //ptr2ForceSensor = ForceSensor;
 
   bool return_function_state;
   int ERROR_RETURNED;
 
   double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
 
-  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile2(ptr2ForceSensor, UPDATED_FORCE_MEASUREMENTS_KGS, force_error, profile_steps, segment_exists,  Texec,  c0, currentDirStatus,  UPDATE_FORCE,  UPDATE_IMU, &ERROR_RETURNED);
+  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile2(ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error, profile_steps, segment_exists,  Texec,  c0, currentDirStatus,  UPDATE_FORCE,  UPDATE_IMU, &ERROR_RETURNED);
   if (return_function_state)
   {
     *stp_error = 0;

@@ -14,7 +14,7 @@
 #define MAX_POS_JOINT1_STEPPER_EEPROM_ADDR  40     // double    
 
 #include "Arduino.h"
-
+#include "HX711.h"
 #include <OvidiusSensors.h>
 #include <utility/OvidiusSensors_config.h>
 
@@ -84,7 +84,7 @@ class CustomStepperOvidiusShield
         
         bool execute_StpTrapzProfile(uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, int * stp_error);
 
-        bool execute_StpTrapzProfile2(sensors::force3axis * ptr2ForceSensor, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error);
+        bool execute_StpTrapzProfile2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error);
 
         bool setStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,  int *stp_error);
 
@@ -94,7 +94,7 @@ class CustomStepperOvidiusShield
 
         bool syncSetStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   int *stp_error);
 
-        bool syncSetStepperGoalPositionVarStep2(sensors::force3axis * ptr2ForceSensor, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps,   int *stp_error);
+        bool syncSetStepperGoalPositionVarStep2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps,   int *stp_error);
 
     private:
         int _stepID;
@@ -137,7 +137,7 @@ class CustomStepperOvidiusShield
 
         void updateDelayTime(double * new_delayTime_sec, double * prev_delayTime_sec, long StpPresentPosition, bool * segment_exists, uint32_t * profile_steps, int *stp_error);
 
-        void updateForceMeasurements(sensors::force3axis * ptr2ForceSensor, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type *force_error);
+        void updateForceMeasurements(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type *force_error);
 
         /*
         sensors::force3axis ForceSensor[num_FORCE_SENSORS] = {
@@ -146,10 +146,10 @@ class CustomStepperOvidiusShield
             sensors::force3axis(DOUT_PIN_Z, SCK_PIN_Z),   //ForceSensor[2] -> ForceSensorZ
         };
         */
-        sensors::force3axis * ForceSensor;        // points to the force sensor object
-
-        unsigned long _update_FORCE_interval;         // [millis]
-        unsigned long _last_FORCE_update;             // [millis]
+        //sensors::force3axis * ForceSensor;              // points to the force sensor object
+        //HX711 * ForceSensorAxis;                        // points to hx711                   
+        unsigned long _update_FORCE_interval;             // [millis]
+        unsigned long _last_FORCE_update;                 // [millis]
 
 };
 
