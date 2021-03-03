@@ -11,6 +11,7 @@
 
 #include <OvidiusSensors.h>
 #include <utility/OvidiusSensors_config.h>
+#include <utility/OvidiusSensors_debug.h>
 
 using namespace std;
 
@@ -71,6 +72,7 @@ CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, 
     _last_STEP_STATE_update = 0;
     _last_LED_update        = 0;
     _last_FORCE_update      = 0;
+    _last_IMU_update        = 0;
 
 }
 
@@ -213,6 +215,39 @@ void CustomStepperOvidiusShield::updateForceMeasurements(sensors::force3axis * p
     }   
 
 }
+// =========================================================================================================== //
+
+void CustomStepperOvidiusShield::updateIMU(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet, sensors::imu_filter FILTER_SELECT, debug_error_type * imu_error)
+{
+  // this function is executed inside execute_StpTrapzProfile2 if user sets flag to true at method call
+  // Updates imu measurements while motor is stepping applying state machine multitasking. The imu 
+  // sensor must have been initialized BEFORE CALLING this function. (corresponding setup method of OvidiusSensors
+  // must have been called at setup ).
+
+    // must read private var _FILTER_INTERVAL_MILLIS and give it to _update_IMU_rate_hz
+    int update_IMU_rate_hz;
+
+    ptr2IMU->getFilterInterval(&update_IMU_rate_hz);
+
+    if ( millis() - _last_IMU_update > (1000 / update_IMU_rate_hz) )
+    {
+      _return_fn_state = ptr2IMU->measure_with_filter_IMU2(ptr2imu_packet, FILTER_SELECT, imu_error);
+
+      _last_IMU_update = millis();
+
+      if (_return_fn_state)
+      {
+        //Serial.print("ROLL  = "); Serial.println(ptr2imu_packet->roll_c);
+        //Serial.print("PITCH = "); Serial.println(ptr2imu_packet->pitch_c);
+        Serial.print("YAW   = "); Serial.println(ptr2imu_packet->yaw_c);
+      }
+      else
+      {
+        Serial.println("NOT MEASURED IMU"); Serial.print("IMU ERROR = "); Serial.println(*imu_error);
+      }
+    }   
+}
+
 // =========================================================================================================== //
 
 // multiStepVarDelay
@@ -983,7 +1018,8 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile(uint32_t * profile_step
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type *force_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error)
+//bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type *force_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error)
+bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error)
 {
 	/*
    * Same as execute_StpTrapzProfile, but is USED FOR STATE MACHINE ONLY!
@@ -993,6 +1029,8 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * 
     //ptr2ForceSensor = ForceSensor;
     unsigned long force_update_duration;
     unsigned long started_force_update;
+    unsigned long imu_update_duration;
+    unsigned long started_imu_update;
 
     const float ETDF              = 1.50;                     // Execution Time Deviation Factor (experimental calculation)
 
@@ -1039,7 +1077,7 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * 
           {
             //Serial.println("MPHKA UPDATE FORCE");
             started_force_update = micros();
-            updateForceMeasurements(ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error);
+            updateForceMeasurements(ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, sensor_error);
             force_update_duration = micros() - started_force_update;
             //Serial.print("UPDATED_FORCE_MEASUREMENTS_KGS = "); Serial.println(*UPDATED_FORCE_MEASUREMENTS_KGS);
           }
@@ -1047,9 +1085,13 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * 
           // 4. updates IMU values
           if (UPDATE_IMU)
           {
-            /* code */
+            //Serial.println("MPHKA UPDATE IMU");
+            started_imu_update = micros();
+            updateIMU(ptr2IMU, ptr2imu_packet, FILTER_SELECT, sensor_error);
+            imu_update_duration = micros() - started_imu_update;
+            Serial.print("imu_update_duration = "); Serial.println(imu_update_duration);
           }
-          
+
           // 5. data logs
 
         }
@@ -1077,7 +1119,7 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * 
       *stp_error = 154;
     }
 
-    if (*stp_error == 0)
+    if( (*stp_error == 0) && (*sensor_error == NO_ERROR) )
     {
       return true;
     }
@@ -1334,7 +1376,7 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep(double * curr
 
 }
 
-bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps,   int *stp_error)
+bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps,   int *stp_error)
 {
   // FUN_CODE = 18* used for stp_error assignment
 
@@ -1349,7 +1391,7 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(sensors::for
 
   double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
 
-  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile2(ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error, profile_steps, segment_exists,  Texec,  c0, currentDirStatus,  UPDATE_FORCE,  UPDATE_IMU, &ERROR_RETURNED);
+  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile2(ptr2IMU, ptr2imu_packet, FILTER_SELECT,  ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error, profile_steps, segment_exists,  Texec,  c0, currentDirStatus,  UPDATE_FORCE,  UPDATE_IMU, &ERROR_RETURNED);
   if (return_function_state)
   {
     *stp_error = 0;
