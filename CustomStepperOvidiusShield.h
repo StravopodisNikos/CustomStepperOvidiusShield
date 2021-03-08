@@ -17,6 +17,8 @@
 #include "HX711.h"
 #include <OvidiusSensors.h>
 #include <utility/OvidiusSensors_config.h>
+#include <Dynamixel2Arduino.h>
+#include "DynamixelProPlusOvidiusShield.h"
 
 using namespace std;
 
@@ -49,6 +51,15 @@ class CustomStepperOvidiusShield
     public:
 
         CustomStepperOvidiusShield(int stepID, int stepPin, int dirPin, int enblPin, int homeTriggerPin, int limitSwitchPin2, int limitSwitchPin3, int RED_LED_pin,int GREEN_LED_pin,int BLUE_LED_pin, int spr, int GEAR_FACTOR, int ft );
+
+        void updateStpAngVelStp(double &current_ang_vel, double delay_sec);
+        
+        void updateStpAbsPos_rad(double &realTimeStpAbsPos, uint32_t StpPresentPulse, int *stp_error);
+
+        void set_ag();
+
+        void getJointsAbsPosition_rad(double * ROBOT_ABS_POS_RAD, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, uint32_t StpPresentPulse, int *error_code);
+        void getJointsAngVelocity_rs(double * ROBOT_ANG_VEL_RS, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PV_PACKET *ptr2_dxl_pv_pck, double half_step_delay_sec, int *error_code);
 
         // read EEPROM settings for stepper Motion Profiles 
         void read_STP_EEPROM_settings(volatile byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp);
@@ -84,7 +95,7 @@ class CustomStepperOvidiusShield
         
         bool execute_StpTrapzProfile(uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, int * stp_error);
 
-        bool execute_StpTrapzProfile2(sensors::imu9dof * ptr2ImuSensor, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error);
+        bool execute_StpTrapzProfile2(sensors::imu9dof * ptr2ImuSensor, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, int * stp_error);
 
         bool setStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,  int *stp_error);
 
@@ -94,7 +105,7 @@ class CustomStepperOvidiusShield
 
         bool syncSetStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   int *stp_error);
 
-        bool syncSetStepperGoalPositionVarStep2(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps,   int *stp_error);
+        bool syncSetStepperGoalPositionVarStep2(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps,  DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck,   int *stp_error);
 
     private:
         int _stepID;
@@ -112,19 +123,34 @@ class CustomStepperOvidiusShield
 
         bool _return_fn_state;
 
+        // Stepper gearbox
         int _spr;
         int _GEAR_FACTOR;
         int _ft;
         double _a;
         double _ag;
-        double _accel_width;
-        double _step_delay_time;
-        double _simultaneous_velocity;
 
+        // Monitoring data
+        signed char _sign_of_Dq;
+        long _currentAbsPos_pulse;             // must be synced with StpPresentPosition
+        double _currentAbsPos_rad;
+        double _currentAngVel_rps;             // Current Stepper Angular velocity [rad/sec]
+        double _currentAngAccel_rps2;          // Current Stepper Angular acceleration [rad/sec2]
+
+        double _prevAbsPos_rad;
+        double _prevAngVel_rps;                // Previous Stepper Angular velocity [rad/sec]
+        double _prevAngAccel_rps2;             // Previous Stepper Angular acceleration [rad/sec2]
+
+        unsigned long _last_joint_pos_update;
+        int _update_joint_pos_interval;
+        unsigned long _last_joint_vel_update;
+        int _update_joint_vel_interval;
+
+        // Velocity Profile vars 
+        double _accel_width;      
         long _accel_count;
         long _ctVel_count;
         long _decel_count;
-
         boolean _STEP_PIN_STATE;
         unsigned long _update_STEP_STATE_interval;         // [micros]
         unsigned long _last_STEP_STATE_update;             // [micros] 
