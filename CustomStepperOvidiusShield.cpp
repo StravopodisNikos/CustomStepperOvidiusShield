@@ -68,7 +68,9 @@ CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, 
     _return_fn_state = false;
 
     // STATES INTERVALS
-    _update_FORCE_interval = UPDATE_FORCE_MEAS_INTERVAL;
+    _update_FORCE_interval     = UPDATE_FORCE_MEAS_INTERVAL;
+    _update_joint_vel_interval = UPDATE_VEL_MEAS_INTERVAL;
+    _update_joint_pos_interval = UPDATE_POS_MEAS_INTERVAL;
 
     // STEPPER MONITORING
     _currentAngVel_rps      = 0;
@@ -84,7 +86,7 @@ CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, 
     _last_FORCE_update      = 0;
     _last_IMU_update        = 0;
 
-    Serial.print("SPR = "); Serial.println(_spr);
+    //Serial.print("SPR = "); Serial.println(_spr);
 }
 
 // =========================================================================================================== //
@@ -192,7 +194,7 @@ void CustomStepperOvidiusShield::updateDelayTime(double * new_delayTime_sec, dou
   (*new_delayTime_sec) = (*new_delayTime_sec) / 2.0 ;       // Because half step pulse is generated each time!
 }
 // =========================================================================================================== //
-void CustomStepperOvidiusShield::updateForceMeasurements(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type * force_error)
+void CustomStepperOvidiusShield::updateForceMeasurements(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , bool &update_force , debug_error_type * force_error)
 {
   // this function is executed inside execute_StpTrapzProfile2 if user sets flag to true at method call
   // Updates force measurements while motor is stepping applying state machine multitasking. The force 
@@ -223,12 +225,17 @@ void CustomStepperOvidiusShield::updateForceMeasurements(sensors::force3axis * p
         }
         */
       //}
-    }   
+      update_force = true;
+    }
+    else
+    {
+      update_force = false;
+    }  
 
 }
 // =========================================================================================================== //
 
-void CustomStepperOvidiusShield::updateIMU(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet, sensors::imu_filter FILTER_SELECT, debug_error_type * imu_error)
+void CustomStepperOvidiusShield::updateIMU(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet, sensors::imu_filter FILTER_SELECT, bool &update_imu, debug_error_type * imu_error)
 {
   // this function is executed inside execute_StpTrapzProfile2 if user sets flag to true at method call
   // Updates imu measurements while motor is stepping applying state machine multitasking. The imu 
@@ -256,7 +263,14 @@ void CustomStepperOvidiusShield::updateIMU(sensors::imu9dof * ptr2IMU, sensors::
       {
         Serial.println("NOT MEASURED IMU"); Serial.print("IMU ERROR = "); Serial.println(*imu_error);
       }
-    }   
+
+      update_imu = true;
+    }
+    else
+    {
+      update_imu = false;
+    }
+    
 }
 
 // =========================================================================================================== //
@@ -315,7 +329,7 @@ void CustomStepperOvidiusShield::set_ag()
   _ag = (double) _ag / _spr;
 }
 
-void CustomStepperOvidiusShield::getJointsAbsPosition_rad(double * ROBOT_ABS_POS_RAD, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, uint32_t StpPresentPulse, int *error_code)
+void CustomStepperOvidiusShield::getJointsAbsPosition_rad(double * ROBOT_ABS_POS_RAD, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, uint32_t StpPresentPulse, bool &update_joint_pos, int *error_code)
 {
     // implemented for state machine only - not in ino file!
     // RETURN nDoFx1 array ROBOT_ABS_POS_RAD (~= currentConfiguration in ino file)
@@ -334,11 +348,16 @@ void CustomStepperOvidiusShield::getJointsAbsPosition_rad(double * ROBOT_ABS_POS
       ROBOT_ABS_POS_RAD[3] = ptr2custom_dxl->convertDxlPulses2Radian(ptr2_dxl_pp_pck->dxl_pp[2]);
 
       _last_joint_pos_update = millis();
-    }
 
+      update_joint_pos = true;
+    }
+    else
+    {
+      update_joint_pos = false;
+    }
 }
 
-void CustomStepperOvidiusShield::getJointsAngVelocity_rs(double * ROBOT_ANG_VEL_RS, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PV_PACKET *ptr2_dxl_pv_pck, double half_step_delay_sec, int *error_code)
+void CustomStepperOvidiusShield::getJointsAngVelocity_rs(double * ROBOT_ANG_VEL_RS, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PV_PACKET *ptr2_dxl_pv_pck, double half_step_delay_sec, bool &update_joint_vel, int *error_code)
 {
     // implemented for state machine only - not in ino file!
     if ( millis() - _last_joint_vel_update > _update_joint_vel_interval )
@@ -356,8 +375,14 @@ void CustomStepperOvidiusShield::getJointsAngVelocity_rs(double * ROBOT_ANG_VEL_
       ROBOT_ANG_VEL_RS[3] = ptr2custom_dxl->convertDxlVelUnits2RadPsec(ptr2_dxl_pv_pck->dxl_pv[2]);
 
       _last_joint_vel_update = millis();
-    }
 
+      update_joint_vel = true;
+    }
+    else
+    {
+      update_joint_vel = false;
+    }
+    
 } 
 // =========================================================================================================== //
 //
@@ -1118,14 +1143,22 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile(uint32_t * profile_step
 // =========================================================================================================== //
 
 //bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type *force_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error)
-bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, int * stp_error)
+bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(tools::dataLogger *ptr2logger, File *ptr2logfiles, sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, int * stp_error)
 {
 	/*
    * Same as execute_StpTrapzProfile, but is USED FOR STATE MACHINE ONLY!
 	 */
-    // Array for real time position
+    // Log Files: 0->position, 1->velocity, 2->force, 3->current, 4->imu
+
+    // Array for real time position/velocity
     double CURRENT_CONFIGURATION_RAD[nDoF];
     double CURRENT_JOINT_VELOCITY_RS[nDoF];
+    unsigned long joint_pos_log_cnt = 0;
+    unsigned long joint_vel_log_cnt = 0;
+    bool updateJointPosLog;
+    bool updateJointVelLog;
+    // Vars for imu measurements
+    bool updateImuLog;
 
     // Vars for force measurements
     //ptr2ForceSensor = ForceSensor;
@@ -1133,6 +1166,8 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::imu9dof * ptr
     unsigned long started_force_update;
     unsigned long imu_update_duration;
     unsigned long started_imu_update;
+    unsigned long force_log_cnt = 0;
+    bool updateForceLog;
 
     const float ETDF              = 1.50;                     // Execution Time Deviation Factor (experimental calculation)
 
@@ -1184,7 +1219,7 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::imu9dof * ptr
           {
             //Serial.println("MPHKA UPDATE FORCE");
             started_force_update = micros();
-            updateForceMeasurements(ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, sensor_error);
+            updateForceMeasurements(ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, updateForceLog, sensor_error);
             force_update_duration = micros() - started_force_update;
             //Serial.print("UPDATED_FORCE_MEASUREMENTS_KGS = "); Serial.println(*UPDATED_FORCE_MEASUREMENTS_KGS);
           }
@@ -1194,22 +1229,51 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::imu9dof * ptr
           {
             //Serial.println("MPHKA UPDATE IMU");
             started_imu_update = micros();
-            updateIMU(ptr2IMU, ptr2imu_packet, FILTER_SELECT, sensor_error);
+            updateIMU(ptr2IMU, ptr2imu_packet, FILTER_SELECT, updateImuLog, sensor_error);
             imu_update_duration = micros() - started_imu_update;
-            Serial.print("imu_update_duration = "); Serial.println(imu_update_duration);
+            //Serial.print("imu_update_duration = "); Serial.println(imu_update_duration);
           }
 
           // 5. read current joint positions
           // updateStpAbsPos_rad(_currentAbsPos_rad, StpPresentPosition, stp_error); // stepper only
-          getJointsAbsPosition_rad(CURRENT_CONFIGURATION_RAD, ptr2custom_dxl, ptr2_dxl_pp_pck, StpPresentPosition, stp_error);
+          getJointsAbsPosition_rad(CURRENT_CONFIGURATION_RAD, ptr2custom_dxl, ptr2_dxl_pp_pck, StpPresentPosition, updateJointPosLog, stp_error);
           
           // 6. read current joint velocities
           // updateStpAngVelStp(_currentAngVel_rps, new_delta_t); // stepper only
-          getJointsAngVelocity_rs(CURRENT_JOINT_VELOCITY_RS, ptr2custom_dxl, ptr2_dxl_pv_pck, new_delta_t, stp_error);
+          getJointsAngVelocity_rs(CURRENT_JOINT_VELOCITY_RS, ptr2custom_dxl, ptr2_dxl_pv_pck, new_delta_t, updateJointVelLog ,  stp_error);
+          
           // 7. read current motor amp
 
-          // 8. data logs
+          // 8. data logs:
+          // 8.1. Joint position
+          if (updateJointPosLog)
+          {
+              joint_pos_log_cnt++;
+              for (size_t i = 0; i < nDoF; i++)
+              {
+                ptr2logger->writeData(CURRENT_CONFIGURATION_RAD[i], millis(), joint_pos_log_cnt, (ptr2logfiles + POS_LOG_ID), sensor_error);
+              }
+          }
+          // 8.2. Joint Velocity
+          if (updateJointVelLog)
+          {
+              joint_vel_log_cnt++;
+              for (size_t i = 0; i < nDoF; i++)
+              {
+                ptr2logger->writeData(CURRENT_JOINT_VELOCITY_RS[i], millis(), joint_vel_log_cnt, (ptr2logfiles + VEL_LOG_ID), sensor_error);
+              }
+          }
+          // 8.3. Force
+          if (updateForceLog)
+          {
+              force_log_cnt++;
+              ptr2logger->writeData((double) *UPDATED_FORCE_MEASUREMENTS_KGS, millis(), force_log_cnt, (ptr2logfiles+ FOR_LOG_ID), sensor_error);
+          }
+          
+          // 8.4. Current
 
+          // 8.5. IMU       
+        
         }
         new_delta_t_micros = (new_delta_t*1000000);
 
@@ -1492,7 +1556,7 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep(double * curr
 
 }
 
-bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck,   int *stp_error)
+bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(tools::dataLogger *ptr2logger, File *ptr2logfiles, sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck,   int *stp_error)
 {
   // FUN_CODE = 18* used for stp_error assignment
 
@@ -1507,7 +1571,7 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(sensors::imu
 
   double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
 
-  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile2(ptr2IMU, ptr2imu_packet, FILTER_SELECT,  ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error, profile_steps, segment_exists,  Texec,  c0, currentDirStatus,  UPDATE_FORCE,  UPDATE_IMU,ptr2custom_dxl, ptr2_dxl_pp_pck, ptr2_dxl_pv_pck, &ERROR_RETURNED);
+  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile2(ptr2logger, ptr2logfiles, ptr2IMU, ptr2imu_packet, FILTER_SELECT,  ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error, profile_steps, segment_exists,  Texec,  c0, currentDirStatus,  UPDATE_FORCE,  UPDATE_IMU,ptr2custom_dxl, ptr2_dxl_pp_pck, ptr2_dxl_pv_pck, &ERROR_RETURNED);
   if (return_function_state)
   {
     *stp_error = 0;

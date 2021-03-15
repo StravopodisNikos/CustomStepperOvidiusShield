@@ -22,7 +22,7 @@
 
 #define STEP_Pin               		    6
 #define DIR_Pin                		    9
-#define ENABLE_Pin               	    10
+#define ENABLE_Pin               	    5
 
 #define RED_LED_PIN                	    A0            // the number of the RED LED pin
 #define GREEN_LED_PIN               	A1                               
