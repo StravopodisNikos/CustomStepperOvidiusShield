@@ -3,6 +3,8 @@
         {
             "name": "Linux",
             "includePath": [
+                "/home/nikos/.arduino15/packages/arduino/tools/**",
+                "/home/nikos/.arduino15/packages/arduino/hardware/sam/1.6.12/**",
                 "/home/nikos/Downloads/arduino-1.8.13/tools/**",
                 "/home/nikos/Arduino/libraries/**",
                 "/home/nikos/Downloads/arduino-1.8.13/libraries/**",
@@ -10,7 +12,7 @@
                 "/home/nikos/Downloads/arduino-1.8.13/hardware/arduino/avr/**"
             ],
             "forcedInclude": [
-                "/home/nikos/Downloads/arduino-1.8.13/hardware/arduino/avr/cores/arduino/Arduino.h"
+                "/home/nikos/.arduino15/packages/arduino/hardware/sam/1.6.12/cores/arduino/Arduino.h"
             ],
             "defines": [
                 "USBCON"

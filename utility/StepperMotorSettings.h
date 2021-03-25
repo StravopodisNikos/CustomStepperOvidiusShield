@@ -2,9 +2,9 @@
 #ifndef StepperMotorSettings_h
 #define StepperMotorSettings_h
 
-#define RED_LED_PIN                	    A0            // the number of the RED LED pin
-#define GREEN_LED_PIN               	A1                               
-#define BLUE_LED_PIN               	    A2 
+#define RED_LED_PIN                	    10            // these are digital pins with pwm capabilities DUE:2-13
+#define GREEN_LED_PIN               	4                               
+#define BLUE_LED_PIN               	    11            // GRIPPER_SERVO_PIN = 12 (!) defined in <utility/OvidiusSensors_config.h>
 #define ACCEL_WIDTH_DENOM		        5
 
 #include <avr/pgmspace.h>
@@ -21,13 +21,7 @@ const PROGMEM uint8_t HOME_TRIGGER_SWITCH = 3;                // This is the Hom
 const PROGMEM uint8_t HALL_SWITCH_PIN2    = 18;				  // This is the Hall effect-MIN limit switch	(4 when no interrupt used)		
 const PROGMEM uint8_t HALL_SWITCH_PIN3    = 19;			      // This is the Hall effect-MAX limit switch    (5 when no interrupt used)
 // IF DXL SHIELD <-
-// IF OPENCR1.0 ->
-//#define HALL_SWITCH_PIN2        	42				 // EXTI_Pin2 = 5			
-//#define HALL_SWITCH_PIN3        	45               // EXTI_Pin3 = 6
-//#define EXTI_Pin2			5
-//#define EXTI_Pin3			6
-// IF OPENCR1.0 <-
-
+const PROGMEM float   ETDF = 1.50f;
 const PROGMEM uint8_t STP_MOVING_STATUS_THRESHOLD   = 1;
 const PROGMEM uint8_t STEP_Pin                      = 6;
 const PROGMEM uint8_t DIR_Pin        	            = 9;
@@ -42,6 +36,6 @@ const PROGMEM uint16_t STP_HOMING_DELAY		        = 500;
 const PROGMEM uint16_t STP_FIXED_DELAY			    = 500;
 const PROGMEM uint16_t BREAK_FREE_STEPS		        = 500;
 
-const PROGMEM uint8_t PROF_STEPS_SIZE	= 4;				// sizeof array that contains vel prof total steps/phase	
+const PROGMEM uint8_t PROF_STEPS_SIZE	            = 4;		// sizeof array that contains vel prof total steps/phase	
 
 #endif
