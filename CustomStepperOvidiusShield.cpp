@@ -236,7 +236,7 @@ void CustomStepperOvidiusShield::updateForceMeasurements(sensors::force3axis * p
 
 }
 // =========================================================================================================== //
-
+/*
 void CustomStepperOvidiusShield::updateIMU(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet, sensors::imu_filter FILTER_SELECT, bool &update_imu, debug_error_type * imu_error)
 {
   // this function is executed inside execute_StpTrapzProfile2 if user sets flag to true at method call
@@ -274,7 +274,7 @@ void CustomStepperOvidiusShield::updateIMU(sensors::imu9dof * ptr2IMU, sensors::
     }
     
 }
-
+*/
 // =========================================================================================================== //
 
 // multiStepVarDelay
@@ -1143,13 +1143,10 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile(uint32_t * profile_step
 } // END OF FUNCTION
 */
 // =========================================================================================================== //
-
+/*
 //bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type *force_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error)
 bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(tools::dataLogger *ptr2logger, File *ptr2logfiles, char *ptr2logfiles_names,  sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, unsigned char * stp_error)
 {
-	/*
-   * Same as execute_StpTrapzProfile, but is USED FOR STATE MACHINE ONLY!
-	 */
     // Log Files: 0->position, 1->velocity, 2->force, 3->current, 4->imu
 
     // Array for real time position/velocity
@@ -1317,7 +1314,7 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(tools::dataLogger *ptr
     }
 
 } // END OF FUNCTION
-
+*/
 // =========================================================================================================== //
 
 bool CustomStepperOvidiusShield::execute_StpTrapzProfile3(tools::dataLogger *ptr2logger, File *ptr2logfiles, char *ptr2logfiles_names,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, unsigned char * stp_error)
@@ -1720,15 +1717,9 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep(double * curr
 
 }
 */
+/*
 bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(tools::dataLogger *ptr2logger, File *ptr2logfiles, char *ptr2logfiles_names, sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck,   unsigned char *stp_error)
 {
-  // FUN_CODE = 18* used for stp_error assignment
-
-  /*
-   * Same as syncSetStepperGoalPositionVarStep, but here execute_StpTrapzProfile2 is executed
-   * This implements state machine logic for stepping!
-   */
-  //ptr2ForceSensor = ForceSensor;
 
   bool return_function_state;
   unsigned char ERROR_RETURNED;
@@ -1759,6 +1750,7 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(tools::dataL
   }
 
 }
+*/
 
 bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep3(tools::dataLogger *ptr2logger, File *ptr2logfiles, char *ptr2logfiles_names, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck,   unsigned char *stp_error)
 {
