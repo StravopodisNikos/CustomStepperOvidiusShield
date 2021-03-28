@@ -1,13 +1,25 @@
  /*
-  * CustomStepperOvidiusShield.cpp - Library for controlling Steppers of the Ovidius Metamorphic Manipulator
-  * Created by N.A. Stravopodis, December, 2020.
+  * CustomStepperOvidiusDueShield.cpp - Library for controlling Steppers of the Ovidius Metamorphic Manipulator
+  * Created by N.A. Stravopodis, March, 2021.
+  * 
+  * This Library is a simple copy-paste of the CustomStepperOvidiusShield.
+  * It will be used to upgrade Ovidius Robot Microprocessor to DUE, because
+  * of memory crashes during data logging on the MEGA board.
+  * 
+  *  [20-3-21] EEPROM Stepper functions are erased. Only slow homing is imple-
+  *  mented(every time @ setup) and the variables read from EEPROM will be written
+  *  as globals.
+  * 
+  *  Method changes:
+  *  1. save_STP_EEPROM_settings - > init_stepper_globals(volatile byte & currentDirStatus, double & currentAbsPos_double, double & VelocityLimitStp, double & AccelerationLimitStp, double & MaxPosLimitStp);
   */
 
 #include "Arduino.h"
-#include <EEPROM.h>
-#include "CustomStepperOvidiusShield.h"
+#include "CustomStepperOvidiusDueShield.h"
 #include <utility/StepperMotorSettings.h>
 #include <utility/stepper_led_intervals.h>
+#include <utility/stepper_led_indicators.h>
+#include <utility/stepper_debug.h>
 
 #include <OvidiusSensors.h>
 #include <utility/OvidiusSensors_config.h>
@@ -19,12 +31,11 @@
 using namespace std;
 
 enum ROT_DIR stepperDirRotation;
-//bool return_function_state;
 
 const double pi              = 3.14159265359;
 
 // Constructor
-CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, int dirPin, int enblPin, int homeTriggerPin, int limitSwitchPin2, int limitSwitchPin3, int RED_LED_pin,int GREEN_LED_pin,int BLUE_LED_pin, int spr, int GEAR_FACTOR, int ft )
+CustomStepperOvidiusDueShield::CustomStepperOvidiusDueShield(int stepID, int stepPin, int dirPin, int enblPin, int homeTriggerPin, int limitSwitchPin2, int limitSwitchPin3, int RED_LED_pin,int GREEN_LED_pin,int BLUE_LED_pin, int spr, int GEAR_FACTOR, int ft )
 {
     pinMode(stepPin, OUTPUT);
     pinMode(dirPin, OUTPUT);
@@ -33,9 +44,9 @@ CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, 
     pinMode(limitSwitchPin2, INPUT);             // LIMIT HALL SWITCH
     pinMode(limitSwitchPin3, INPUT);             // LIMIT HALL SWITCH
 
-    pinMode(RED_LED_pin, OUTPUT);
-    pinMode(GREEN_LED_pin, OUTPUT);
-    pinMode(BLUE_LED_pin, OUTPUT);
+    //pinMode(RED_LED_pin, OUTPUT);
+    //pinMode(GREEN_LED_pin, OUTPUT);
+    //pinMode(BLUE_LED_pin, OUTPUT);
 
     digitalWrite(stepPin, LOW);
     digitalWrite(enblPin, LOW);
@@ -71,6 +82,7 @@ CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, 
     _update_FORCE_interval     = UPDATE_FORCE_MEAS_INTERVAL;
     _update_joint_vel_interval = UPDATE_VEL_MEAS_INTERVAL;
     _update_joint_pos_interval = UPDATE_POS_MEAS_INTERVAL;
+    _update_CURRENT_interval   = UPDATE_CURRENT_MEAS_INTERVAL;
 
     // STEPPER MONITORING
     _currentAngVel_rps      = 0;
@@ -85,8 +97,9 @@ CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, 
     _last_LED_update        = 0;
     _last_FORCE_update      = 0;
     _last_IMU_update        = 0;
-
-    //Serial.print("SPR = "); Serial.println(_spr);
+    _last_CURRENT_update    = 0;
+    _last_joint_pos_update  = 0;
+    _last_joint_vel_update  = 0;
 }
 
 // =========================================================================================================== //
@@ -95,8 +108,18 @@ CustomStepperOvidiusShield::CustomStepperOvidiusShield(int stepID, int stepPin, 
 //
 // =========================================================================================================== //
 
-// singleStepVarDelay
-void CustomStepperOvidiusShield::singleStepVarDelay(unsigned long delayTime) {
+void CustomStepperOvidiusDueShield::pauseForFixedTime_millis(unsigned long delayTime) {
+
+    unsigned long time_now_micros = millis();
+    while(millis() < time_now_micros + delayTime){}                   //wait approx. [μs]
+
+    return;
+} 
+
+// =========================================================================================================== //
+
+// singleStepVarDelay -> DEPRECATED
+void CustomStepperOvidiusDueShield::singleStepVarDelay(unsigned long delayTime) {
   // Custom Stepping Function for Velocity-Acceleration Profiles
 
     unsigned long time_now_micros = micros();
@@ -108,12 +131,13 @@ void CustomStepperOvidiusShield::singleStepVarDelay(unsigned long delayTime) {
 // =========================================================================================================== //
 
 // updateSingleStepVarDelay
-void CustomStepperOvidiusShield::updateSingleStepVarDelay(unsigned long delayTime, long * StpPresentPosition, bool * updateDelayTime) {
+void CustomStepperOvidiusDueShield::updateSingleStepVarDelay(unsigned long delayTime, uint32_t * StpPresentPosition, bool * updateDelayTime) {
   // Stepping Function to implement Velocity-Acceleration Profiles using
   // state machine multitasking - Here no pausing inside stepping occurs
   // Only half step pulse is generated! Total+steps/phase must be multiplied x 2! 
 
     _update_STEP_STATE_interval = delayTime;
+    
     if (micros() - _last_STEP_STATE_update > _update_STEP_STATE_interval)
     {
       digitalWrite(_stepPin, !_STEP_PIN_STATE);
@@ -124,13 +148,10 @@ void CustomStepperOvidiusShield::updateSingleStepVarDelay(unsigned long delayTim
 
       (*StpPresentPosition)++;  
 
-      *updateDelayTime = true;
+      *updateDelayTime = true;      // now that a step was executed, asks the processor to calculate the next delay time
     }
     else
     {
-      //*StpPresentPosition = *StpPresentPosition;
-      //(*StpPresentPosition)++;
-
       *updateDelayTime = false;
     }
     
@@ -138,7 +159,7 @@ void CustomStepperOvidiusShield::updateSingleStepVarDelay(unsigned long delayTim
 
 // =========================================================================================================== //
 
-void CustomStepperOvidiusShield::updateDelayTime(double * new_delayTime_sec, double * prev_delayTime_sec, long StpPresentPosition, bool * segment_exists, uint32_t * profile_steps, unsigned char *stp_error)
+void CustomStepperOvidiusDueShield::updateDelayTime(float * new_delayTime_sec, float * prev_delayTime_sec, uint32_t StpPresentPosition, bool * segment_exists, uint32_t * profile_steps, unsigned char *stp_error)
 {
     // This function is executed only if updateSingleStepVarDelay sets the corresponding flag to true
     // New delay time calculated in [sec] is returned with "delayTime_sec"
@@ -154,7 +175,7 @@ void CustomStepperOvidiusShield::updateDelayTime(double * new_delayTime_sec, dou
       {
         _accel_count++;                                                                                                       // Acceleration Phase: delta_t -> minimizes
         //Serial.print("EXISTS : ACCEL PHASE"); Serial.println(_accel_count);
-        (*new_delayTime_sec) =  *prev_delayTime_sec - RAMP_FACTOR * ( (2*(*new_delayTime_sec)+rest)/(4*_accel_count+1) );     // c_n [sec]
+        (*new_delayTime_sec) =  *prev_delayTime_sec - RAMP_FACTOR * ( (2*(*prev_delayTime_sec)+rest)/(4*_accel_count+1) );     // c_n [sec]
       }
       else if( (StpPresentPosition > profile_steps[1]) && (StpPresentPosition < profile_steps[1]+profile_steps[2]) )          // Linear Segment: delta_t -> constant
       {
@@ -166,9 +187,9 @@ void CustomStepperOvidiusShield::updateDelayTime(double * new_delayTime_sec, dou
       {
         _decel_count++; 
         //Serial.print("EXISTS : DECEL PHASE"); Serial.println(_decel_count);                                                                           
-        (*new_delayTime_sec) =  (*prev_delayTime_sec) - RAMP_FACTOR * ( (2*(*new_delayTime_sec)+rest)/(4*_decel_count+1) );    // Deceleration Phase: delta_t -> maximizes [sec] 
+        (*new_delayTime_sec) =  (*prev_delayTime_sec) - RAMP_FACTOR * ( (2*(*prev_delayTime_sec)+rest)/(4*_decel_count+1) );    // Deceleration Phase: delta_t -> maximizes [sec] 
       }
-      *stp_error = 151;
+      //*stp_error = 151;
     }
     else
 {                                                                                                                               // Linear Segment doesn't exist
@@ -176,27 +197,27 @@ void CustomStepperOvidiusShield::updateDelayTime(double * new_delayTime_sec, dou
       {
         _accel_count++;
         //Serial.print("NOT EXISTS : ACCEL PHASE"); Serial.println(_accel_count);
-        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*new_delayTime_sec)+rest)/(4*_accel_count+1) );       // c_n [sec]
+        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*prev_delayTime_sec)+rest)/(4*_accel_count+1) );       // c_n [sec]
       }                                   
       else
     {                                                                                                                           // Deceleration Phase: delta_t -> maximizes
         _decel_count++;                                                                                                         // Negative Value!
         //Serial.print("NOT EXISTS : DECEL PHASE"); Serial.println(_decel_count); 
-        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*new_delayTime_sec)+rest)/(4*_decel_count+1) );       // Deceleration Phase: delta_t -> maximizes [sec] 
+        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*prev_delayTime_sec)+rest)/(4*_decel_count+1) );       // Deceleration Phase: delta_t -> maximizes [sec] 
       }
-      *stp_error = 152;                                                                       
+      //*stp_error = 152;                                                                       
     }
 
   //Serial.print("delayTime_sec in updateDelayTime = "); Serial.println(*new_delayTime_sec,6);
 
-  (*prev_delayTime_sec) = (*new_delayTime_sec);
+  //(*prev_delayTime_sec) = (*new_delayTime_sec);
 
   (*new_delayTime_sec) = (*new_delayTime_sec) / 2.0 ;       // Because half step pulse is generated each time!
 
   return;
 }
 // =========================================================================================================== //
-void CustomStepperOvidiusShield::updateForceMeasurements(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , bool &update_force , debug_error_type * force_error)
+void CustomStepperOvidiusDueShield::updateForceMeasurements(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , bool & update_force , debug_error_type * force_error)
 {
   // this function is executed inside execute_StpTrapzProfile2 if user sets flag to true at method call
   // Updates force measurements while motor is stepping applying state machine multitasking. The force 
@@ -237,7 +258,7 @@ void CustomStepperOvidiusShield::updateForceMeasurements(sensors::force3axis * p
 }
 // =========================================================================================================== //
 /*
-void CustomStepperOvidiusShield::updateIMU(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet, sensors::imu_filter FILTER_SELECT, bool &update_imu, debug_error_type * imu_error)
+void CustomStepperOvidiusDueShield::updateIMU(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet, sensors::imu_filter FILTER_SELECT, bool &update_imu, debug_error_type * imu_error)
 {
   // this function is executed inside execute_StpTrapzProfile2 if user sets flag to true at method call
   // Updates imu measurements while motor is stepping applying state machine multitasking. The imu 
@@ -275,10 +296,11 @@ void CustomStepperOvidiusShield::updateIMU(sensors::imu9dof * ptr2IMU, sensors::
     
 }
 */
+
 // =========================================================================================================== //
 
 // multiStepVarDelay
-void CustomStepperOvidiusShield::multiStepVarDelay(unsigned long delayTime, uint32_t numSteps2Move) {
+void CustomStepperOvidiusDueShield::multiStepVarDelay(unsigned long delayTime, uint32_t numSteps2Move) {
   // Custom Stepping Function for Velocity-Acceleration Profiles
 
   for (size_t i = 0; i < numSteps2Move; i++)
@@ -291,28 +313,24 @@ void CustomStepperOvidiusShield::multiStepVarDelay(unsigned long delayTime, uint
 
 } // END function multiStepVarDelay
 
-void CustomStepperOvidiusShield::updateStpAngVelStp(double &current_ang_vel, double half_step_delay_sec)
+void CustomStepperOvidiusDueShield::updateStpAngVelStp(float &current_ang_vel, float half_step_delay_sec)
 {
   // this fn works only with state machine functions. Since in state machine
   // half pulses are generated for the calculated delay time, here wmega is 
   // extracted for half step info.
 
-  //set_ag();                       // executed at ocject creation in the constructor fn!
-
-  double half_step_rad = _ag / 2.0;
-
-  current_ang_vel = half_step_rad / half_step_delay_sec;
+  current_ang_vel = ( float ) ( _ag / ( 2.0 * half_step_delay_sec ) );
 
   return;
 }
 
-void CustomStepperOvidiusShield::updateStpAbsPos_rad(double &realTimeStpAbsPos, uint32_t StpPresentPulse, unsigned char *stp_error)
+void CustomStepperOvidiusDueShield::updateStpAbsPos_rad(float &realTimeStpAbsPos, uint32_t StpPresentPulse, unsigned char *stp_error)
 {
   // StpPresentPulse is the counter of pulses for relative p2p stepper movement!
   // _prevAbsPos_rad MUST be initialized right before p2p execution loop!
 
   // first find dq from loop execution pulse counter
-  double Delta_q_rad = convertStpPulses2Radian(StpPresentPulse, stp_error);
+  float Delta_q_rad = convertStpPulses2Radian(StpPresentPulse, stp_error);
 
   realTimeStpAbsPos = _prevAbsPos_rad + (_sign_of_Dq * Delta_q_rad);
 
@@ -321,37 +339,40 @@ void CustomStepperOvidiusShield::updateStpAbsPos_rad(double &realTimeStpAbsPos, 
 
 // =========================================================================================================== //
 
-void CustomStepperOvidiusShield::set_ag()
-{
-  // Deprecated function. Was used to debug constructor error.
-  // Constructor was not able to see the StepperMotorSettings.h
-  // when it was placed on different folder! [7-3-21]
-
-  _ag = 2.0 * pi;
-  _ag = (double) _ag / _spr;
-}
-
-void CustomStepperOvidiusShield::getJointsAbsPosition_rad(double * ROBOT_ABS_POS_RAD, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, uint32_t StpPresentPulse, bool &update_joint_pos, unsigned char *error_code)
+void CustomStepperOvidiusDueShield::getJointsAbsPosition_rad(float * ROBOT_ABS_POS_RAD, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, uint32_t StpPresentPulse, bool &update_joint_pos, unsigned char *error_code)
 {
     // implemented for state machine only - not in ino file!
     // RETURN nDoFx1 array ROBOT_ABS_POS_RAD (~= currentConfiguration in ino file)
+    // [27-3-21] BUG - since this function works with updateSingleStepVarDelay the step pulse must be changed to /2!
+
+    uint32_t real_step_for_rad_convert;
 
     if ( millis() - _last_joint_pos_update > _update_joint_pos_interval )
     {
+      _last_joint_pos_update = millis();
+
       // stepper
-      updateStpAbsPos_rad(_currentAbsPos_rad, StpPresentPulse, error_code);
+      real_step_for_rad_convert = StpPresentPulse / 2; // only locally 
+      updateStpAbsPos_rad(_currentAbsPos_rad, real_step_for_rad_convert, error_code);
       ROBOT_ABS_POS_RAD[0] = _currentAbsPos_rad;
       // dxl
       // call dxl library function that reads position
-      ptr2custom_dxl->syncGetDynamixelsPresentPosition(ptr2_dxl_pp_pck->Dxl_ids, ptr2_dxl_pp_pck->Dxl_ids_size, ptr2_dxl_pp_pck->dxl_pp, ptr2_dxl_pp_pck->SR_pp, error_code, ptr2_dxl_pp_pck->dxl2ard_obj);
-      // convert dxl pulses -> radians
-      ROBOT_ABS_POS_RAD[1] = ptr2custom_dxl->convertDxlPulses2Radian(ptr2_dxl_pp_pck->dxl_pp[0]);
-      ROBOT_ABS_POS_RAD[2] = ptr2custom_dxl->convertDxlPulses2Radian(ptr2_dxl_pp_pck->dxl_pp[1]);
-      ROBOT_ABS_POS_RAD[3] = ptr2custom_dxl->convertDxlPulses2Radian(ptr2_dxl_pp_pck->dxl_pp[2]);
+      if ( ptr2custom_dxl->syncGetDynamixelsPresentPosition(ptr2_dxl_pp_pck->Dxl_ids, ptr2_dxl_pp_pck->Dxl_ids_size, ptr2_dxl_pp_pck->dxl_pp, ptr2_dxl_pp_pck->SR_pp, error_code, ptr2_dxl_pp_pck->dxl2ard_obj) )
+      {
+        // convert dxl pulses -> radians
+        ROBOT_ABS_POS_RAD[1] = ptr2custom_dxl->convertDxlPulses2Radian(ptr2_dxl_pp_pck->dxl_pp[0]);
+        ROBOT_ABS_POS_RAD[2] = ptr2custom_dxl->convertDxlPulses2Radian(ptr2_dxl_pp_pck->dxl_pp[1]);
+        ROBOT_ABS_POS_RAD[3] = ptr2custom_dxl->convertDxlPulses2Radian(ptr2_dxl_pp_pck->dxl_pp[2]);
 
-      _last_joint_pos_update = millis();
+        update_joint_pos = true;
+      }
+      else
+      {
+          update_joint_pos = false;
+          *error_code = syncGetPP_returned_error;
+          return;        
+      }
 
-      update_joint_pos = true;
     }
     else
     {
@@ -359,82 +380,143 @@ void CustomStepperOvidiusShield::getJointsAbsPosition_rad(double * ROBOT_ABS_POS
     }
 }
 
-void CustomStepperOvidiusShield::getJointsAngVelocity_rs(double * ROBOT_ANG_VEL_RS, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PV_PACKET *ptr2_dxl_pv_pck, double half_step_delay_sec, bool &update_joint_vel, unsigned char *error_code)
+void CustomStepperOvidiusDueShield::getJointsAngVelocity_rs(float * ROBOT_ANG_VEL_RS, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PV_PACKET *ptr2_dxl_pv_pck, float half_step_delay_sec, bool &update_joint_vel, unsigned char *error_code)
 {
     // implemented for state machine only - not in ino file!
     if ( millis() - _last_joint_vel_update > _update_joint_vel_interval )
     {
+
+      _last_joint_vel_update = millis();
+
       // stepper
       updateStpAngVelStp(_currentAngVel_rps, half_step_delay_sec);
       ROBOT_ANG_VEL_RS[0] = _currentAngVel_rps;
 
       // dxl
-      // call dxl library function that reads velocity
-      ptr2custom_dxl->syncGetDynamixelsPresentVelocity(ptr2_dxl_pv_pck->Dxl_ids,ptr2_dxl_pv_pck->Dxl_ids_size, ptr2_dxl_pv_pck->dxl_pv, ptr2_dxl_pv_pck->SR_pv, error_code, ptr2_dxl_pv_pck->dxl2ard_obj);
-      // convert dxl vel units -> radians/sec
-      ROBOT_ANG_VEL_RS[1] = ptr2custom_dxl->convertDxlVelUnits2RadPsec(ptr2_dxl_pv_pck->dxl_pv[0]);
-      ROBOT_ANG_VEL_RS[2] = ptr2custom_dxl->convertDxlVelUnits2RadPsec(ptr2_dxl_pv_pck->dxl_pv[1]);
-      ROBOT_ANG_VEL_RS[3] = ptr2custom_dxl->convertDxlVelUnits2RadPsec(ptr2_dxl_pv_pck->dxl_pv[2]);
+      if( ptr2custom_dxl->syncGetDynamixelsPresentVelocity(ptr2_dxl_pv_pck->Dxl_ids,ptr2_dxl_pv_pck->Dxl_ids_size, ptr2_dxl_pv_pck->dxl_pv, ptr2_dxl_pv_pck->SR_pv, error_code, ptr2_dxl_pv_pck->dxl2ard_obj) )
+      {
+        // wait for syncRead to finish data transfer(?)
 
-      _last_joint_vel_update = millis();
+        // convert dxl vel units -> radians/sec
+        ROBOT_ANG_VEL_RS[1] = ptr2custom_dxl->convertDxlVelUnits2RadPsec(ptr2_dxl_pv_pck->dxl_pv[0]);
+        ROBOT_ANG_VEL_RS[2] = ptr2custom_dxl->convertDxlVelUnits2RadPsec(ptr2_dxl_pv_pck->dxl_pv[1]);
+        ROBOT_ANG_VEL_RS[3] = ptr2custom_dxl->convertDxlVelUnits2RadPsec(ptr2_dxl_pv_pck->dxl_pv[2]);
 
-      update_joint_vel = true;
+        update_joint_vel = true;
+        return;
+      }
+      else
+      {
+          update_joint_vel = false;
+          //*error_code = syncGetPV_returned_error;
+          return;
+      }
     }
     else
     {
       update_joint_vel = false;
+      return;
     }
     
 } 
+
+// =========================================================================================================== //
+//void CustomStepperOvidiusDueShield::getJointsCurrent_mA(double * ROBOT_CUR_mA, sensors::currentSensor * ptr2CurrentSensor, sensors::current_packet * ptr2current_packet, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PC_PACKET *ptr2_dxl_pc_pck, bool & update_current, unsigned char *error_code )
+void CustomStepperOvidiusDueShield::getJointsCurrent_A(float * ROBOT_CUR_A, sensors::currentSensor * ptr2CurrentSensor, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PC_PACKET *ptr2_dxl_pc_pck, bool & update_current, unsigned char *error_code )
+{
+    debug_error_type current_sensor_error_returned;
+    float stepper_measured_current;
+
+    if (millis() - _last_CURRENT_update > _update_CURRENT_interval)
+    {
+      // [24-3-21] stepper-Adafruit sensor -> DEPRECATED => CHANGED ARGUMENT OF FUNCTION CALL!
+      //ptr2CurrentSensor->measureCurrent_mA(ptr2current_packet, &current_sensor_error_returned );
+      //ROBOT_CUR_mA[0] = ptr2current_packet->current_measurement_mA;
+
+      _last_CURRENT_update = millis();
+
+      // [24-3-21] stepper-ACS712 current module
+      ptr2CurrentSensor->measureCurrentACS712_A(stepper_measured_current, &current_sensor_error_returned );
+      ROBOT_CUR_A[0] = stepper_measured_current;
+      // dxl
+      if ( ptr2custom_dxl->syncGetDynamixelsPresentCurrent(ptr2_dxl_pc_pck->Dxl_ids,ptr2_dxl_pc_pck->Dxl_ids_size,ptr2_dxl_pc_pck->dxl_pc,ptr2_dxl_pc_pck->SR_pc, error_code,ptr2_dxl_pc_pck->dxl2ard_obj) )
+      {
+        // convert mA-> A
+        ROBOT_CUR_A[1] = ( ptr2_dxl_pc_pck->dxl_pc[0] / 1000.0 );
+        ROBOT_CUR_A[2] = ( ptr2_dxl_pc_pck->dxl_pc[1] / 1000.0 );
+        ROBOT_CUR_A[3] = ( ptr2_dxl_pc_pck->dxl_pc[2] / 1000.0 );
+
+        if ( (current_sensor_error_returned==NO_ERROR) && (error_code == NO_ERROR) )
+        {
+          update_current = true;
+        }
+        else
+        {
+          update_current = false;
+          //*error_code = syncGetPC_returned_error;
+        }
+      }
+    }
+    else
+    {
+      update_current = false;
+    }
+
+    return;
+}
+
+// =========================================================================================================== //
+
+bool CustomStepperOvidiusDueShield::getDynamixelsMotionState(DynamixelProPlusOvidiusShield *ptr2custom_dxl, DXL_MOV_PACKET *ptr2_dxl_mov_pck, unsigned char *error_code )
+{
+  // Returns TRUE if (ALL dxls)->NO MOTION(FINISHED) or FALSE if->(even 1 dxl)->MOTION(STILL MOVING)
+  int Dxls = ptr2_dxl_mov_pck->Dxl_ids_size;
+  bool DXLS_FINISHED_MOTION = false;
+  uint8_t DXL_MOVING[Dxls];
+
+  ptr2custom_dxl->syncGetDynamixelsMoving(ptr2_dxl_mov_pck->Dxl_ids, ptr2_dxl_mov_pck->Dxl_ids_size, ptr2_dxl_mov_pck->dxl_mov, ptr2_dxl_mov_pck->SR_mov, error_code, ptr2_dxl_mov_pck->dxl2ard_obj);
+  DXL_MOVING[0] = ptr2_dxl_mov_pck->dxl_mov[0];
+  DXL_MOVING[1] = ptr2_dxl_mov_pck->dxl_mov[1];
+  DXL_MOVING[2] = ptr2_dxl_mov_pck->dxl_mov[2];
+
+  for (size_t i = 0; i < Dxls; i++)
+  {
+    if ( DXL_MOVING[i] == true ) // this dxl is still moving
+    {
+      DXLS_FINISHED_MOTION = false; break; 
+    }
+    else
+    {
+      DXLS_FINISHED_MOTION = true;
+    }      
+  }
+
+  return DXLS_FINISHED_MOTION;
+}
+
+
 // =========================================================================================================== //
 //
 //  P U B L I C -- C L A S S -- M E M B E R S
 //
 // =========================================================================================================== //
-void CustomStepperOvidiusShield::read_STP_EEPROM_settings(volatile byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
+void CustomStepperOvidiusDueShield::setStepperLed(const unsigned char *led_indicator)
 {
-	/*
-	 *	FUN_CODE = 1 used for stp_error assignment, each error is given the value: 1*... for example: 11, 12, 13
-   *  This function is executed at setup() to read form EEPROM and Initialize the global variables of Joint1 Stepper
-	 */
-  EEPROM.get(CP_JOINT1_STEPPER_EEPROM_ADDR, *currentAbsPos_double);
+    // FIRST TURN OFF PREVIOUS VAL
+    analogWrite(_RED_LED_pin   , 0);  // write RED VALUE
+    analogWrite(_GREEN_LED_pin , 0);  // write GREEN VALUE 
+    analogWrite(_BLUE_LED_pin  , 0); // write BLUE VALUE 
 
-	*currentDirStatus = EEPROM.read(CD_JOINT1_STEPPER_EEPROM_ADDR);
-
-	EEPROM.get(VL_JOINT1_STEPPER_EEPROM_ADDR, *VelocityLimitStp);    			
-
-	EEPROM.get(AL_JOINT1_STEPPER_EEPROM_ADDR, *AccelerationLimitStp);    			
-
-  EEPROM.get(MAX_POS_JOINT1_STEPPER_EEPROM_ADDR, *MaxPosLimitStp); 
-
-} // END FUNCTION: readEEPROMsettings
-
-void CustomStepperOvidiusShield::save_STP_EEPROM_settings(volatile byte * currentDirStatus, double * currentAbsPos_double, double * VelocityLimitStp, double * AccelerationLimitStp, double * MaxPosLimitStp)
-{
-	/*
-  *	FUN_CODE = 2 used for stp_error assignment, each error is given the value: 1*... for example: 11, 12, 13
-	 *	Executed before exit setup\action loops - NEVER INSIDE LOOP
-	 */
-
-		// 1. Save the dirPin status only if value has changed
-		EEPROM.update(CD_JOINT1_STEPPER_EEPROM_ADDR, *currentDirStatus);
-
-		// 2. Save current absolute position in which stepper motor finished job
-		EEPROM.put(CP_JOINT1_STEPPER_EEPROM_ADDR, *currentAbsPos_double);
-
-		// 3. Save stepper Velocity/Acceleration Limits
-		EEPROM.put(VL_JOINT1_STEPPER_EEPROM_ADDR, *VelocityLimitStp);
-
-		EEPROM.put(AL_JOINT1_STEPPER_EEPROM_ADDR, *AccelerationLimitStp);
-
-    // 4. Save Joint1 Limit Angle
-    EEPROM.put(MAX_POS_JOINT1_STEPPER_EEPROM_ADDR, *MaxPosLimitStp);
-
-} // END FUNCTION: saveEEPROMsettings
+    analogWrite(_RED_LED_pin   , led_indicator[0]);  // write RED VALUE
+    analogWrite(_GREEN_LED_pin , led_indicator[1]);  // write GREEN VALUE 
+    analogWrite(_BLUE_LED_pin  , led_indicator[2]); // write BLUE VALUE 
+ 
+    return;        
+}
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::setStepperHomePositionSlow(double * currentAbsPos_double, volatile byte *currentDirStatus,  volatile bool *kill_motion_triggered,  unsigned char *stp_error){
+bool CustomStepperOvidiusDueShield::setStepperHomePositionSlow(float * currentAbsPos_double, volatile byte *currentDirStatus,  volatile bool *kill_motion_triggered,  unsigned char *stp_error){
 /*
  *	FUN_CODE = 3 used for stp_error assignment, each error is given the value: 1*... for example: 11, 12, 13
  *  HOMES MOTOR - currentDirStatus changes value inside external interrupt arduino functions
@@ -455,12 +537,12 @@ bool CustomStepperOvidiusShield::setStepperHomePositionSlow(double * currentAbsP
       {
         digitalWrite(_dirPin, *currentDirStatus); // change direction, since the currentDirStatus value was changed inside ISR function
         
-        CustomStepperOvidiusShield::multiStepVarDelay(homing_stepping_delay, breakFreeSteps); // break free from magnetic field
+        CustomStepperOvidiusDueShield::multiStepVarDelay(homing_stepping_delay, breakFreeSteps); // break free from magnetic field
 
         *kill_motion_triggered = false; // set the volatile value back to false
       }
       
-      CustomStepperOvidiusShield::singleStepVarDelay(homing_stepping_delay);                  
+      CustomStepperOvidiusDueShield::singleStepVarDelay(homing_stepping_delay);                  
 
       // Everything worked
       *stp_error = 0;
@@ -483,10 +565,9 @@ else
 } // END OF FUNCTION
 
 // =========================================================================================================== //
-
-bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsPos_double, volatile byte * currentDirStatus, volatile bool * kill_motion_triggered,  unsigned char * stp_error){
-	// *	FUN_CODE = 4 used for stp_error assignment, each error is given the value: 1*... for example: 11, 12, 13
-  
+/*
+bool CustomStepperOvidiusDueShield::setStepperHomePositionFast(double * currentAbsPos_double, volatile byte * currentDirStatus, volatile bool * kill_motion_triggered,  unsigned char * stp_error)
+{
   bool return_function_state;
   unsigned long homing_stepping_delay = STP_HOMING_DELAY;                                // micros
   uint32_t relative_steps_2_move;
@@ -500,7 +581,7 @@ bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsP
   
   // 2.Calculate relative steps
   double goalAbsPos_double = 0;
-  relative_steps_2_move = CustomStepperOvidiusShield::calculateRelativeSteps2Move(currentAbsPos_double, &goalAbsPos_double, stp_error);
+  relative_steps_2_move = CustomStepperOvidiusDueShield::calculateRelativeSteps2Move(currentAbsPos_double, &goalAbsPos_double, stp_error);
   if (*stp_error == 92)
   {
     *stp_error = 492;
@@ -515,7 +596,7 @@ bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsP
   }
 
   // 3.  Define direction of motion
-  return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, &goalAbsPos_double, currentDirStatus);
+  return_function_state = CustomStepperOvidiusDueShield::setStepperGoalDirection(currentAbsPos_double, &goalAbsPos_double, currentDirStatus);
   if (return_function_state)
   {
     *stp_error = 0;
@@ -530,7 +611,7 @@ bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsP
   // steps motor for pre-calculated number of steps and for the period that hall pin is not triggered
   while( (motor_step <= relative_steps_2_move) && (digitalRead(_homeTriggerPin) )) {
           
-      CustomStepperOvidiusShield::singleStepVarDelay(homing_stepping_delay);
+      CustomStepperOvidiusDueShield::singleStepVarDelay(homing_stepping_delay);
 
       motor_step++;
 
@@ -538,7 +619,7 @@ bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsP
       {
         digitalWrite(_dirPin, *currentDirStatus); // change direction, since the currentDirStatus value was changed inside ISR function
         
-        CustomStepperOvidiusShield::multiStepVarDelay(homing_stepping_delay, breakFreeSteps); // break free from magnetic field
+        CustomStepperOvidiusDueShield::multiStepVarDelay(homing_stepping_delay, breakFreeSteps); // break free from magnetic field
 
         *kill_motion_triggered = false; // set the volatile value back to false
       }
@@ -557,14 +638,14 @@ bool CustomStepperOvidiusShield::setStepperHomePositionFast(double * currentAbsP
     return false;
   } 
 } // END OF FUNCTION
-
+*/
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::setStepperGoalDirection(double * currentAbsPos_double, double * goalAbsPos_double, volatile byte * currentDirStatus){
+bool CustomStepperOvidiusDueShield::setStepperGoalDirection(float * currentAbsPos_double, float * goalAbsPos_double, volatile byte * currentDirStatus){
   // FUN_CODE = 5 used for stp_error assignment
 
   // Calculate Delta_q1
-  double Delta_q1 = *goalAbsPos_double - *currentAbsPos_double;
+  float Delta_q1 = *goalAbsPos_double - *currentAbsPos_double;
 
   if (Delta_q1 < 0 )
   {
@@ -590,7 +671,7 @@ return true;
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::setStepperGoalPositionFixedStep(double * currentAbsPos_double, double * goalAbsPos_double, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered,  unsigned char *stp_error)
+bool CustomStepperOvidiusDueShield::setStepperGoalPositionFixedStep(float * currentAbsPos_double, float * goalAbsPos_double, volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered,  unsigned char *stp_error)
 {
   /*
    *  FUN_CODE = 6 used for stp_error assignment
@@ -601,7 +682,7 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionFixedStep(double * curren
   bool return_function_state;
 
   // Determine Direction of Rotation
-  return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
+  return_function_state = CustomStepperOvidiusDueShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
   if (return_function_state)
   {
     *stp_error = 0;
@@ -612,7 +693,7 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionFixedStep(double * curren
   }
   
   // Calculate relative steps to move
-  relative_steps_2_move = CustomStepperOvidiusShield::calculateRelativeSteps2Move(currentAbsPos_double, goalAbsPos_double, stp_error);
+  relative_steps_2_move = CustomStepperOvidiusDueShield::calculateRelativeSteps2Move(currentAbsPos_double, goalAbsPos_double, stp_error);
   *relative_movement_in_steps = relative_steps_2_move;
   if (*stp_error == 92)
   {
@@ -628,7 +709,7 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionFixedStep(double * curren
   }
 
   // Move Motor to goal position - kills motion if limit switch is ON!
-  return_function_state = CustomStepperOvidiusShield::moveStp2Position(&relative_steps_2_move, currentDirStatus, kill_motion_triggered, stp_error);
+  return_function_state = CustomStepperOvidiusDueShield::moveStp2Position(&relative_steps_2_move, currentDirStatus, kill_motion_triggered, stp_error);
   if (*stp_error == 81)
   {
     *stp_error = 81;
@@ -656,7 +737,7 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionFixedStep(double * curren
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::testP2Pparams_StpTrapzVelProfile(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double *Ta, unsigned char *stp_error) {
+bool CustomStepperOvidiusDueShield::testP2Pparams_StpTrapzVelProfile(float * currentAbsPos_double, float * goalAbsPos_double, float * Vexec, float * Aexec, float * Texec, float *Ta, unsigned char *stp_error) {
 
   /*
    *  FUN_CODE = 7 used for stp_error assignment
@@ -665,11 +746,11 @@ bool CustomStepperOvidiusShield::testP2Pparams_StpTrapzVelProfile(double * curre
    *  2. If V,A|exec <= V,A|max then sets (Tsync=Texec) 
    *  3. If V,A|exec > V,A|max then sends error code that requests to increase Texec and aborts
    */
-  double *VelocityLimitStp;
-  double *AccelerationLimitStp;
+  float VelocityLimitStp      = 1.0;
+  float AccelerationLimitStp  = 20.0;
 
   // Calculate 
-  double Delta_q1 = *goalAbsPos_double - *currentAbsPos_double;	// [rad]
+  float Delta_q1 = *goalAbsPos_double - *currentAbsPos_double;	// [rad]
 
   // Type of trajectory: Trajectory with assigned duratins T,Ta-p.69 Melchiorri
 	*Vexec = abs( Delta_q1 ) / ( (1 - _accel_width) * (*Texec) )  ;  // [rad/sec]
@@ -677,11 +758,11 @@ bool CustomStepperOvidiusShield::testP2Pparams_StpTrapzVelProfile(double * curre
   *Ta = _accel_width * (*Texec);
 
   // Read Vmax,Amax for Stepper from EEPROM
-  EEPROM.get(VL_JOINT1_STEPPER_EEPROM_ADDR, *VelocityLimitStp);    			
+  //EEPROM.get(VL_JOINT1_STEPPER_EEPROM_ADDR, *VelocityLimitStp);    			
 
-	EEPROM.get(AL_JOINT1_STEPPER_EEPROM_ADDR, *AccelerationLimitStp);  
+	//EEPROM.get(AL_JOINT1_STEPPER_EEPROM_ADDR, *AccelerationLimitStp);  
 
-  if ( ( (*Vexec) <= (*VelocityLimitStp) ) && ( (*Aexec) <= (*AccelerationLimitStp) ))
+  if ( ( (*Vexec) <= (VelocityLimitStp) ) && ( (*Aexec) <= (AccelerationLimitStp) ))
   {
     *stp_error = 71;
     // doesn't change Vexec,Axec,Texec,Ta,accel_width!
@@ -721,7 +802,7 @@ bool CustomStepperOvidiusShield::testP2Pparams_StpTrapzVelProfile(double * curre
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::moveStp2Position(uint32_t * relative_steps_2_move, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, unsigned char *stp_error)
+bool CustomStepperOvidiusDueShield::moveStp2Position(uint32_t * relative_steps_2_move, volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, unsigned char *stp_error)
 {
   /*
    *  FUN_CODE = 8 used for stp_error assignment
@@ -737,7 +818,7 @@ bool CustomStepperOvidiusShield::moveStp2Position(uint32_t * relative_steps_2_mo
   while ( (!(*kill_motion_triggered)) && (STP_CNT <= (*relative_steps_2_move)))
   {
     STP_CNT++;
-    CustomStepperOvidiusShield::singleStepVarDelay(fixed_stepping_delay);
+    CustomStepperOvidiusDueShield::singleStepVarDelay(fixed_stepping_delay);
     *stp_error = 81;
   }
 
@@ -752,7 +833,7 @@ bool CustomStepperOvidiusShield::moveStp2Position(uint32_t * relative_steps_2_mo
 
     for (size_t i = 0; i < 1000; i++)
     {
-      CustomStepperOvidiusShield::singleStepVarDelay(fixed_stepping_delay);
+      CustomStepperOvidiusDueShield::singleStepVarDelay(fixed_stepping_delay);
     }
     
     *stp_error = 82;
@@ -776,15 +857,15 @@ bool CustomStepperOvidiusShield::moveStp2Position(uint32_t * relative_steps_2_mo
 
 // =========================================================================================================== //
 
-uint32_t CustomStepperOvidiusShield::calculateRelativeSteps2Move(double * currentAbsPos_double, double * goalAbsPos_double, unsigned char * stp_error)
+uint32_t CustomStepperOvidiusDueShield::calculateRelativeSteps2Move(float * currentAbsPos_double, float * goalAbsPos_double, unsigned char * stp_error)
 {
     // FUN_CODE = 9 used for stp_error assignment
 
-    double Delta_q1_double = abs( (*goalAbsPos_double) - (*currentAbsPos_double) );
+    float Delta_q1_double = abs( (*goalAbsPos_double) - (*currentAbsPos_double) );
 
     unsigned char ERROR_RETURNED;
 
-    uint32_t relative_steps_2_move =  CustomStepperOvidiusShield::convertRadian2StpPulses(Delta_q1_double, &ERROR_RETURNED);
+    uint32_t relative_steps_2_move =  CustomStepperOvidiusDueShield::convertRadian2StpPulses(Delta_q1_double, &ERROR_RETURNED);
 
     *stp_error = ERROR_RETURNED;
 
@@ -806,7 +887,7 @@ uint32_t CustomStepperOvidiusShield::calculateRelativeSteps2Move(double * curren
 
 // =========================================================================================================== //
 
-uint32_t CustomStepperOvidiusShield::convertRadian2StpPulses(double position_in_radians, unsigned char *stp_error)
+uint32_t CustomStepperOvidiusDueShield::convertRadian2StpPulses(float position_in_radians, unsigned char *stp_error)
 {
     // FUN_CODE = 10* used for stp_error assignment
 
@@ -820,7 +901,7 @@ uint32_t CustomStepperOvidiusShield::convertRadian2StpPulses(double position_in_
     else 
     {
         // _ag = ( 2 * pi ) / ( _GEAR_FACTOR * _spr )
-        position_in_stp_pulses = (uint32_t) ( (abs(position_in_radians) * _GEAR_FACTOR * SPR1) / (2*pi) );
+        position_in_stp_pulses = (uint32_t) ( (abs(position_in_radians) * _GEAR_FACTOR * _spr) / (2*pi) );
         //position_in_stp_pulses = (uint32_t) abs(position_in_radians) / _ag;
         *stp_error = 102;
     }
@@ -830,10 +911,10 @@ return position_in_stp_pulses;
   
 // =========================================================================================================== //
 
-double CustomStepperOvidiusShield::convertStpPulses2Radian(uint32_t position_in_stp_pulses, unsigned char *stp_error)
+float CustomStepperOvidiusDueShield::convertStpPulses2Radian(uint32_t position_in_stp_pulses, unsigned char *stp_error)
 {
   // FUN_CODE = 11* used for stp_error assignment
-    double position_in_radians;
+    float position_in_radians;
     
     if (position_in_stp_pulses == 0)
     {
@@ -842,7 +923,7 @@ double CustomStepperOvidiusShield::convertStpPulses2Radian(uint32_t position_in_
     }
     else
     {   // _ag = ( 2 * pi ) / ( _GEAR_FACTOR * _spr )
-        position_in_radians = (double) ( (position_in_stp_pulses * 2 * pi) / (SPR1 * GEAR_FACTOR_PLANETARY) );
+        position_in_radians = (float) ( (position_in_stp_pulses * 2 * pi) / (_spr * GEAR_FACTOR_PLANETARY) );
         //position_in_radians = (double) (position_in_stp_pulses) * _ag;
         *stp_error = 112;
     }
@@ -852,16 +933,16 @@ double CustomStepperOvidiusShield::convertStpPulses2Radian(uint32_t position_in_
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile(double * currentAbsPos_double, double * goalAbsPos_double,  double & Vexec, double * Aexec, double & Texec, double & Ta,  bool * segmentExists, unsigned char *stp_error){
+bool CustomStepperOvidiusDueShield::segmentExists_StpTrapzVelProfile(float * currentAbsPos_double, float * goalAbsPos_double,  float & Vexec, float * Aexec, float & Texec, float & Ta,  bool * segmentExists, unsigned char *stp_error){
 
   // FUN_CODE = 12* used for stp_error assignment
   /*
    *  Given Vexec,Aexec checks if linear segment exists
    */
 
-  double Delta_q1_double = *goalAbsPos_double - *currentAbsPos_double;	// [rad]
+  float Delta_q1_double = *goalAbsPos_double - *currentAbsPos_double;	// [rad]
 
-  double h_cond = pow((Vexec),2.0) / (*Aexec) ;				        // Condition factor for linear segment existence in Trapezoidal Velocity Profile
+  float h_cond = pow((Vexec),2.0) / (*Aexec) ;				        // Condition factor for linear segment existence in Trapezoidal Velocity Profile
 
   if( Delta_q1_double >= h_cond)
   {
@@ -896,16 +977,16 @@ bool CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile(double * curre
 
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile2(double * currentAbsPos_double, double * goalAbsPos_double,  double & Vexec, double * Aexec, double & Texec, double & Ta,  bool * segmentExists, unsigned char *stp_error){
+bool CustomStepperOvidiusDueShield::segmentExists_StpTrapzVelProfile2(float * currentAbsPos_double, float * goalAbsPos_double,  float & Vexec, float * Aexec, float & Texec, float & Ta,  bool * segmentExists, unsigned char *stp_error){
 
   // FUN_CODE = __ used for stp_error assignment
   /*
    *  Based on segmentExists_StpTrapzVelProfile2 BUT here calculateProfVelAccel_preassignedVelTexec3 was used in p2pcsp2.ino file
    */
 
-  double Delta_q1_double = abs( *goalAbsPos_double - *currentAbsPos_double );	// [rad]
+  float Delta_q1_double = abs( *goalAbsPos_double - *currentAbsPos_double );	// [rad]
 
-  double h_cond = abs( pow((Vexec),2.0) / (*Aexec) );				        // Condition factor for linear segment existence in Trapezoidal Velocity Profile
+  float h_cond = abs( pow((Vexec),2.0) / (*Aexec) );				        // Condition factor for linear segment existence in Trapezoidal Velocity Profile
 
   if( Delta_q1_double >= h_cond)
   {
@@ -938,35 +1019,35 @@ bool CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile2(double * curr
 
 // =========================================================================================================== //
 
-double CustomStepperOvidiusShield::calculateInitialStepDelay(double * Aexec)
+float CustomStepperOvidiusDueShield::calculateInitialStepDelay(float * Aexec)
 {
   // FUN_CODE = 13* used for stp_error assignment
   // Determine initial step delay time for real-time profile generation: c0 with ignored inaccuracy factor [sec]
 
-  double sqrt_for_c0_calc =  (2 * _ag) /  (*Aexec);
-  double c0              =  0.676 * _ft * pow(10.0,-6.0) * sqrt(sqrt_for_c0_calc);							                  
+  float sqrt_for_c0_calc =  (2 * _ag) /  (*Aexec);
+  float c0              =  0.676 * _ft * pow(10.0,-6.0) * sqrt(sqrt_for_c0_calc);							                  
 
 return c0;
 }
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(double * currentAbsPos_double, double * goalAbsPos_double, double & Vexec, double * Aexec, double * Texec, double * Ta,  bool * segmentExists, unsigned char * stp_error, uint32_t *profile_steps)
+bool CustomStepperOvidiusDueShield::returnSteps_StpTrapzVelProfile(float * currentAbsPos_double, float * goalAbsPos_double, float & Vexec, float * Aexec, float * Texec, float * Ta,  bool * segmentExists, unsigned char * stp_error, uint32_t *profile_steps)
 {
   // FUN_CODE = 14* used for stp_error assignment
   /*
    * RETURNS THE STEPS OF EACH P2P MOTION SEGMENT in an uint32_t array: profile_steps[] = {relative_steps_2_move, nmov_Ta, nmov_linseg, nmov_Td};
    */
 
-    double Delta_q1_double = (*goalAbsPos_double) - (*currentAbsPos_double);
+    float Delta_q1_double = (*goalAbsPos_double) - (*currentAbsPos_double);
 
     unsigned char ERROR_RETURNED;
     uint32_t relative_steps_2_move;
-    double Delta_q1_accel_double;
-    double Delta_q1_lin_seg_double;
+    float Delta_q1_accel_double;
+    float Delta_q1_lin_seg_double;
     uint32_t nmov_Ta,nmov_Td,nmov_linseg;
 
     // first calculate the relative steps of all motion
-    relative_steps_2_move = CustomStepperOvidiusShield::calculateRelativeSteps2Move(currentAbsPos_double, goalAbsPos_double, stp_error);
+    relative_steps_2_move = CustomStepperOvidiusDueShield::calculateRelativeSteps2Move(currentAbsPos_double, goalAbsPos_double, stp_error);
     if (*stp_error == 141)
     {
       *stp_error = 141;
@@ -991,7 +1072,7 @@ bool CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(double * current
         // Returns junk value, I will use the simplest form Ta=Td
         //Delta_q1_lin_seg_double = (*Aexec) * _accel_width * pow((*Texec),2.0) * ( 1 - 2 * _accel_width);                  // eq.3.9.2 Melchiorri p.66
 
-        nmov_Ta     = CustomStepperOvidiusShield::convertRadian2StpPulses(Delta_q1_accel_double, &ERROR_RETURNED);        // Steps of Acceleration Phase; 
+        nmov_Ta     = CustomStepperOvidiusDueShield::convertRadian2StpPulses(Delta_q1_accel_double, &ERROR_RETURNED);        // Steps of Acceleration Phase; 
         nmov_linseg = relative_steps_2_move - 2 *  nmov_Ta;                                                             
         nmov_Td     = nmov_Ta;
         *stp_error = ERROR_RETURNED;
@@ -1001,7 +1082,7 @@ bool CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(double * current
         // In this case: accel_width changes value! Vmax is recalculated! Texec is recalculated!
         Delta_q1_accel_double  = 0.5 * (*Aexec) * pow((*Ta),2.0);
 
-        nmov_Ta      = CustomStepperOvidiusShield::convertRadian2StpPulses(Delta_q1_accel_double, &ERROR_RETURNED);        // Steps of Acceleration Phase;
+        nmov_Ta      = CustomStepperOvidiusDueShield::convertRadian2StpPulses(Delta_q1_accel_double, &ERROR_RETURNED);        // Steps of Acceleration Phase;
         nmov_linseg  = 0;
         nmov_Td      = relative_steps_2_move - nmov_Ta ;                                                                   // Steps of Decceleration Phase;   
         
@@ -1039,7 +1120,7 @@ bool CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(double * current
 
 // =========================================================================================================== //
 /*
-bool CustomStepperOvidiusShield::execute_StpTrapzProfile(uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, unsigned char * stp_error)
+bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile(uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, unsigned char * stp_error)
 {
 	
   //  FUN_CODE = 15* used for stp_error assignment
@@ -1105,7 +1186,7 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile(uint32_t * profile_step
 
         unsigned long new_delta_t_micros = (new_delta_t*1000000);
 
-        CustomStepperOvidiusShield::singleStepVarDelay(new_delta_t_micros);                           // Executes Motor Step 
+        CustomStepperOvidiusDueShield::singleStepVarDelay(new_delta_t_micros);                           // Executes Motor Step 
 
         // Calculate Actual Angular Velocity    ->Needs timer
         // Calculate Actual Angular Acceleration->Needs timer
@@ -1144,8 +1225,8 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile(uint32_t * profile_step
 */
 // =========================================================================================================== //
 /*
-//bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type *force_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error)
-bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(tools::dataLogger *ptr2logger, File *ptr2logfiles, char *ptr2logfiles_names,  sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, unsigned char * stp_error)
+//bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile2(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS ,debug_error_type *force_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, int * stp_error)
+bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile2(tools::dataLogger *ptr2logger, File *ptr2logfiles, char *ptr2logfiles_names,  sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, unsigned char * stp_error)
 {
     // Log Files: 0->position, 1->velocity, 2->force, 3->current, 4->imu
 
@@ -1210,7 +1291,7 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(tools::dataLogger *ptr
         if (updateDelayTime == true)
         {
           // 1. Always update delay time when stepper has changed state!
-          CustomStepperOvidiusShield::updateDelayTime(&new_delta_t, &prev_delta_t, StpPresentPosition, segmentExists, profile_steps_new, stp_error);
+          CustomStepperOvidiusDueShield::updateDelayTime(&new_delta_t, &prev_delta_t, StpPresentPosition, segmentExists, profile_steps_new, stp_error);
           //Serial.println("delay time updated");
 
           // 2. Updates force sensor values -> talks to HX711 using OvidiusSensors methods
@@ -1283,7 +1364,7 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(tools::dataLogger *ptr
         new_delta_t_micros = (new_delta_t*1000000);
 
         // send step pulse unsigned long delayTime, long & StpPresentPosition, bool & updateDelayTime
-        CustomStepperOvidiusShield::updateSingleStepVarDelay(new_delta_t_micros, &StpPresentPosition, &updateDelayTime);  // Updates Motor Step 
+        CustomStepperOvidiusDueShield::updateSingleStepVarDelay(new_delta_t_micros, &StpPresentPosition, &updateDelayTime);  // Updates Motor Step 
         
         //Serial.print("StpPresentPosition = "); Serial.println(StpPresentPosition);
         //Serial.print("force_update_duration = "); Serial.println(force_update_duration);
@@ -1317,40 +1398,48 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile2(tools::dataLogger *ptr
 */
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::execute_StpTrapzProfile3(tools::dataLogger *ptr2logger, File *ptr2logfiles, char *ptr2logfiles_names,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists,  double * Texec,  double delta_t, volatile byte * currentDirStatus, bool UPDATE_FORCE, bool UPDATE_IMU, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, unsigned char * stp_error)
+//bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char *ptr2logfiles_names,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, sensors::currentSensor * ptr2CurrentSensor, sensors::current_packet * ptr2current_packet, debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists, double delta_t, bool UPDATE_FORCE, bool UPDATE_CURRENT, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck, unsigned char * stp_error)
+//bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char * ptr2logfiles_names,  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, sensors::currentSensor * ptr2CurrentSensor, debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists, double delta_t, bool UPDATE_FORCE, bool UPDATE_CURRENT, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck, unsigned char * stp_error)
+bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char * ptr2logfiles_names [LOG_FILES_DIR_CHAR_LEN],  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, sensors::currentSensor * ptr2CurrentSensor, debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists, float delta_t, bool UPDATE_SENSOR[] , DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck, unsigned char * stp_error)
 {
-    // SAME AS execute_StpTrapzProfile2 BUT NO IMU HERE!
+  // [24-3-21] Removed  sensors::current_packet * ptr2current_packet because Adafruit INA219 is not used
+  // [25-3-21] Bug! Filenames must be given in a 2D array
+  // [26-3-21] Only stepper movement will be considered. the evaluation of synced motion will be done in the corresponding ino file.
 
-    // Array for real time position/velocity
-    double CURRENT_CONFIGURATION_RAD[nDoF];
-    double CURRENT_JOINT_VELOCITY_RS[nDoF];
-    unsigned long joint_pos_log_cnt = 1;    // single zero line was written in file creation!
-    unsigned long joint_vel_log_cnt = 1;    // single zero line was written in file creation!
-    bool updateJointPosLog;
-    bool updateJointVelLog;
-    // Vars for imu measurements
-    bool updateImuLog;
+    // SAME AS execute_StpTrapzProfile2 BUT NO IMU HERE!
+    bool DYNAMIXELS_STOPED_MOVING = false;  // assumes that sync set goal position command to dxl was sent before this function call!!!
+    bool STEPPER_REACHED_GOAL_POS = false;  // logical, it hasn't even started!
+    bool SYNC_MOTION_FINISHED     = false;
+
+    // Vars for real time position/velocity
+    float CURRENT_CONFIGURATION_RAD[nDoF];
+    float CURRENT_JOINT_VELOCITY_RS[nDoF];
+    unsigned long joint_pos_log_cnt = 0;    // 1 => single zero line was written in file creation! 0 => nothing was written @file creation
+    unsigned long joint_vel_log_cnt = 0;    // single zero line was written in file creation!
+    bool updateJointPosLog = false;
+    bool updateJointVelLog = false;
+    // Vars for real time current measurement
+    float CURRENT_MEASUREMENTS_mA[nDoF];
+    unsigned long joint_cur_log_cnt = 0;    // single zero line was written in file creation!
+    bool updateJointCurLog = false;
 
     // Vars for force measurements
     //ptr2ForceSensor = ForceSensor;
+    float * UPDATED_FORCE_MEASUREMENT_KGS;   // [21-3-21] single force measurement Zaxis 
     unsigned long force_update_duration;
     unsigned long started_force_update;
-    unsigned long imu_update_duration;
-    unsigned long started_imu_update;
-    unsigned long force_log_cnt = 1;        // single zero line was written in file creation!
-    bool updateForceLog;
+    unsigned long force_log_cnt = 0;        // single zero line was written in file creation!
+    bool updateForceLog = false;
 
-    const float ETDF              = 1.50;                     // Execution Time Deviation Factor (experimental calculation)
+    //const float ETDF              = 1.50;                     // Execution Time Deviation Factor (experimental calculation)
 
     // Initialize variable for timing/derivative calculations
-    unsigned long time_duration;
-    double time_duration_double;
-    double prev_delta_t = delta_t; 
-    double new_delta_t;                                       // Delay time in [sec] - Here the initial value is given, will change inside loop
+    float prev_delta_t = delta_t;                            // delta_t <=> c0
+    float new_delta_t  = prev_delta_t;                       // Delay time in [sec] - Here the initial value is given, will change inside loop
     unsigned long new_delta_t_micros;                         // Delay time in [micros]
 
     uint32_t StpPresentPosition = 0;
-    bool updateDelayTime = true;                              // the delay time MUST BE CALCULATED in first do-while iteration
+    bool updateStepDelayTime = false;                         // the delay time MUST NOT BE CALCULATED in first do-while iteration
 
     // Variables for Real-time Stepper Position/Velocity calculation
     _prevAbsPos_rad = _currentAbsPos_rad;
@@ -1372,99 +1461,120 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile3(tools::dataLogger *ptr
     unsigned long motor_movement_start = millis();
     do
     {
-    		// Inside this if every desired update() function must be called
-        if (updateDelayTime == true)
+      // Inside this if every desired update() function must be called
+      if (updateStepDelayTime)
+      {
+        setStepperLed(stepper_stepping_in_progress); // Olive
+
+        // 1. Always update delay time when stepper has changed state!
+        CustomStepperOvidiusDueShield::updateDelayTime(&new_delta_t, &prev_delta_t, StpPresentPosition, segmentExists, profile_steps_new, stp_error);
+        
+        prev_delta_t = new_delta_t;                   // the new_delta_t hasn't yet implemented but this is the value that will return as previous...
+
+      }
+      else
+      {
+        setStepperLed(stepper_turn_off_led);         // it has meaning to "see" if an update takes too long.. Only then we are able to see the "blinking"
+
+        // HERE until next step pin state change we have time to calculate real time data...
+        // CAUTION -> NOTHING is ALWAYS executed here! Here we have time to check if it is time 
+        // to update the real time data, and if and only if time has come, we calculate/read!
+
+        // 2. Updates force sensor values -> talks to HX711 using OvidiusSensors methods
+        if (UPDATE_SENSOR[FOR_LOG_ID])
         {
-          // 1. Always update delay time when stepper has changed state!
-          CustomStepperOvidiusShield::updateDelayTime(&new_delta_t, &prev_delta_t, StpPresentPosition, segmentExists, profile_steps_new, stp_error);
-          //Serial.println("delay time updated");
-
-          // 2. Updates force sensor values -> talks to HX711 using OvidiusSensors methods
-          if (UPDATE_FORCE)
-          {
-            //Serial.println("MPHKA UPDATE FORCE");
-            started_force_update = micros();
-            updateForceMeasurements(ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, updateForceLog, sensor_error);
-            force_update_duration = micros() - started_force_update;
-            //Serial.print("UPDATED_FORCE_MEASUREMENTS_KGS = "); Serial.println(*UPDATED_FORCE_MEASUREMENTS_KGS);
-          }
-          
-          // 4. updates IMU values -> REMOVED: USE execute_StpTrapzProfile2 INSTEAD!
-          //if (UPDATE_IMU)
-          //{}
-
-          // 5. read current joint positions
-          // updateStpAbsPos_rad(_currentAbsPos_rad, StpPresentPosition, stp_error); // stepper only
-          getJointsAbsPosition_rad(CURRENT_CONFIGURATION_RAD, ptr2custom_dxl, ptr2_dxl_pp_pck, StpPresentPosition, updateJointPosLog, stp_error);
-          
-          // 6. read current joint velocities
-          // updateStpAngVelStp(_currentAngVel_rps, new_delta_t); // stepper only
-          getJointsAngVelocity_rs(CURRENT_JOINT_VELOCITY_RS, ptr2custom_dxl, ptr2_dxl_pv_pck, new_delta_t, updateJointVelLog ,  stp_error);
-          
-          // 7. read current motor amp
-
-          // 8. data logs:
-          // 8.1. Joint position
-          if (updateJointPosLog)
-          {
-              joint_pos_log_cnt++;
-              ptr2logger->openFile((ptr2logfiles + POS_LOG_ID), ptr2logfiles_names[POS_LOG_ID], FILE_WRITE, sensor_error);
-              for (size_t i = 0; i < nDoF; i++)
-              {
-                ptr2logger->writeData(CURRENT_CONFIGURATION_RAD[i], millis(), joint_pos_log_cnt, (ptr2logfiles + POS_LOG_ID), sensor_error);
-              }
-              ptr2logger->closeFile((ptr2logfiles + POS_LOG_ID), sensor_error);
-          }
-          // 8.2. Joint Velocity
-          if (updateJointVelLog)
-          {
-              joint_vel_log_cnt++;
-              ptr2logger->openFile((ptr2logfiles + VEL_LOG_ID), ptr2logfiles_names[VEL_LOG_ID], FILE_WRITE, sensor_error);
-              for (size_t i = 0; i < nDoF; i++)
-              {
-                ptr2logger->writeData(CURRENT_JOINT_VELOCITY_RS[i], millis(), joint_vel_log_cnt, (ptr2logfiles + VEL_LOG_ID), sensor_error);
-              }
-              ptr2logger->closeFile((ptr2logfiles + VEL_LOG_ID), sensor_error);
-          }
-          // 8.3. Force
-          if (updateForceLog)
-          {
-              force_log_cnt++;
-              ptr2logger->openFile((ptr2logfiles + FOR_LOG_ID), ptr2logfiles_names[FOR_LOG_ID], FILE_WRITE, sensor_error);
-              ptr2logger->writeData((double) *UPDATED_FORCE_MEASUREMENTS_KGS, millis(), force_log_cnt, (ptr2logfiles+ FOR_LOG_ID), sensor_error);
-              ptr2logger->closeFile((ptr2logfiles + FOR_LOG_ID), sensor_error);
-          }
-          
-          // 8.4. Current
-
-          // 8.5. IMU       
-        
+          //started_force_update = micros();
+          updateForceMeasurements(ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENT_KGS, updateForceLog, sensor_error);
+          //force_update_duration = micros() - started_force_update;
         }
-        new_delta_t_micros = (new_delta_t*1000000);
 
-        // send step pulse unsigned long delayTime, long & StpPresentPosition, bool & updateDelayTime
-        CustomStepperOvidiusShield::updateSingleStepVarDelay(new_delta_t_micros, &StpPresentPosition, &updateDelayTime);  // Updates Motor Step 
-        
-        //Serial.print("StpPresentPosition = "); Serial.println(StpPresentPosition);
-        //Serial.print("force_update_duration = "); Serial.println(force_update_duration);
-    }while(  (profile_steps_new[0] - StpPresentPosition) != 0 );
+        // 3. read current joint positions
+        if (UPDATE_SENSOR[POS_LOG_ID])
+        {
+          getJointsAbsPosition_rad(CURRENT_CONFIGURATION_RAD, ptr2custom_dxl, ptr2_dxl_pp_pck, StpPresentPosition, updateJointPosLog, stp_error);
+        }
 
-    time_duration = millis() - motor_movement_start;    // Calculates Stepper Motion Execution Time 
-    time_duration_double = time_duration / 1000.0;
-    Serial.print("Total execution time [sec] = "); Serial.println(time_duration_double,3);
+        // 4. read current joint velocities
+        if (UPDATE_SENSOR[VEL_LOG_ID])
+        {
+          getJointsAngVelocity_rs(CURRENT_JOINT_VELOCITY_RS, ptr2custom_dxl, ptr2_dxl_pv_pck, new_delta_t, updateJointVelLog ,  stp_error);
+        }
 
-    if ( time_duration_double <= ( ETDF * (*Texec)) )   // if synced motion was successful
-    {
-      *Texec = time_duration_double;
-      *stp_error = 0;
-    }
-    else
-    {
-      *Texec = time_duration_double;
-      *stp_error = 154;
-    }
+        // 5. read current of joints
+        if (UPDATE_SENSOR[CUR_LOG_ID])
+        {
+          //getJointsCurrent_mA(CURRENT_MEASUREMENTS_mA, ptr2CurrentSensor, ptr2current_packet,ptr2custom_dxl,ptr2_dxl_pc_pck, updateJointCurLog, stp_error  ); -> for INA219b only!
+          getJointsCurrent_A(CURRENT_MEASUREMENTS_mA, ptr2CurrentSensor, ptr2custom_dxl, ptr2_dxl_pc_pck, updateJointCurLog, stp_error  );
+        }
 
-    if( (*stp_error == 0) && (*sensor_error == NO_ERROR) )
+        // 6. check what dynamixels are doing(moving=1,finished=0)
+
+        // 7. data logs:
+        //if ( (updateJointPosLog) && (*stp_error != NO_ERROR) )
+        if ( updateJointPosLog )
+        {
+            // make sure the dynamixel packet is received!
+            //pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS);
+
+            joint_pos_log_cnt++;
+            ptr2logger->openFile((ptr2logfiles + POS_LOG_ID), ptr2logfiles_names[POS_LOG_ID] , O_CREAT | O_APPEND | O_WRITE, sensor_error);
+            ptr2logger->writeData(CURRENT_CONFIGURATION_RAD, nDoF,  millis(), joint_pos_log_cnt, (ptr2logfiles + POS_LOG_ID), sensor_error);
+            ptr2logger->closeFile((ptr2logfiles + POS_LOG_ID), sensor_error);
+        }
+        if  ( updateJointVelLog ) 
+        {
+            // make sure the dynamixel packet is received!
+            //pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS);
+
+            joint_vel_log_cnt++;
+            ptr2logger->openFile((ptr2logfiles + VEL_LOG_ID), ptr2logfiles_names[VEL_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
+            ptr2logger->writeData(CURRENT_JOINT_VELOCITY_RS, nDoF, millis(), joint_vel_log_cnt, (ptr2logfiles + VEL_LOG_ID), sensor_error);
+            ptr2logger->closeFile((ptr2logfiles + VEL_LOG_ID), sensor_error);
+        }
+        if ( updateForceLog ) 
+        {
+            force_log_cnt++;
+            ptr2logger->openFile((ptr2logfiles + FOR_LOG_ID), ptr2logfiles_names[FOR_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
+            ptr2logger->writeData(UPDATED_FORCE_MEASUREMENT_KGS, 1, millis(), force_log_cnt, (ptr2logfiles+ FOR_LOG_ID), sensor_error);
+            ptr2logger->closeFile((ptr2logfiles + FOR_LOG_ID), sensor_error);
+        }
+        if ( updateJointCurLog ) 
+        {
+            // make sure the dynamixel packet is received!
+            //pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS);
+
+            joint_cur_log_cnt++;
+            ptr2logger->openFile((ptr2logfiles + CUR_LOG_ID), ptr2logfiles_names[CUR_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
+            ptr2logger->writeData(CURRENT_MEASUREMENTS_mA, nDoF, millis(), joint_cur_log_cnt, (ptr2logfiles + CUR_LOG_ID), sensor_error);
+            ptr2logger->closeFile((ptr2logfiles + CUR_LOG_ID), sensor_error);              
+        }   
+
+      }
+
+      // Convert the value to micros for updateSingleStepVarDelay and check if is feasible in current stepper motor driver
+      new_delta_t_micros = (unsigned long) ( new_delta_t * 1000000) ;   // [DEL_TIME_SEC] * [SEC2MICROS]
+      if (new_delta_t_micros < MIN_STEP_DELAY_MICROS)
+      {
+        new_delta_t_micros = MIN_STEP_DELAY_MICROS;
+      }
+      // Send step pulse unsigned long delayTime, long & StpPresentPosition, bool & updateDelayTime
+      CustomStepperOvidiusDueShield::updateSingleStepVarDelay(new_delta_t_micros, &StpPresentPosition, &updateStepDelayTime);  // Updates Motor Step 
+
+      // CHECK IF STEPPER FINISHED
+      if ( (profile_steps_new[0] - StpPresentPosition) == 0)
+      {
+        STEPPER_REACHED_GOAL_POS = true;
+        updateStepDelayTime = false;
+      }
+      else
+      {
+        STEPPER_REACHED_GOAL_POS = false;
+      }
+
+    }while(  !STEPPER_REACHED_GOAL_POS ); // while loop takes into consideration ONLY the Stepper!
+
+    //if( (STEPPER_REACHED_GOAL_POS) && (*sensor_error == NO_ERROR) && (*stp_error == NO_STP_ERROR) )
+    if ( STEPPER_REACHED_GOAL_POS ) 
     {
       return true;
     }
@@ -1477,7 +1587,7 @@ bool CustomStepperOvidiusShield::execute_StpTrapzProfile3(tools::dataLogger *ptr
 
 // =========================================================================================================== //
 /*
-bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta,  volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   unsigned char *stp_error)
+bool CustomStepperOvidiusDueShield::setStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta,  volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   unsigned char *stp_error)
 {
   // FUN_CODE = 16* used for stp_error assignment
   // Follows flowchart of setStepperGoalPositionFixedStep but now a var step is used in each segment of motion
@@ -1486,7 +1596,7 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentA
     bool return_function_state;
 
     // I . Determine Direction of Rotation
-    return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
+    return_function_state = CustomStepperOvidiusDueShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1502,7 +1612,7 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentA
     // II.3 Given II.2 the conditions for the Trapezoidal Profile are evaluted -> returnSteps_StpTrapzVelProfile -> An array of the steps of each segment is returned
     // II.4 Executes Motion with Trapezoidal Profile
     unsigned char ERROR_RETURNED;
-    return_function_state = CustomStepperOvidiusShield::testP2Pparams_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, Vexec, Aexec, Texec, Ta, &ERROR_RETURNED);
+    return_function_state = CustomStepperOvidiusDueShield::testP2Pparams_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, Vexec, Aexec, Texec, Ta, &ERROR_RETURNED);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1513,7 +1623,7 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentA
     }
 
     bool SEGMENT_EXISTS; 
-    return_function_state = CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double,  *Vexec, Aexec, *Texec, *Ta, &SEGMENT_EXISTS, &ERROR_RETURNED);
+    return_function_state = CustomStepperOvidiusDueShield::segmentExists_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double,  *Vexec, Aexec, *Texec, *Ta, &SEGMENT_EXISTS, &ERROR_RETURNED);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1524,7 +1634,7 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentA
     }
 
     //uint32_t PROFILE_STEPS[4];
-    return_function_state = CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, *Vexec, Aexec, Texec, Ta,  &SEGMENT_EXISTS, stp_error, profile_steps);
+    return_function_state = CustomStepperOvidiusDueShield::returnSteps_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, *Vexec, Aexec, Texec, Ta,  &SEGMENT_EXISTS, stp_error, profile_steps);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1536,9 +1646,9 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentA
 
     // *this fn will be removed for sync motion with dxl! The final Texec must be given to the Dxl's. Dxl setGoalPosition must be sent and then EXECUTE stepper motion
     // here for testing the stepper timing only!
-    double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
+    double c0 = CustomStepperOvidiusDueShield::calculateInitialStepDelay(Aexec);
 
-    return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile(profile_steps, &SEGMENT_EXISTS,  Texec,  c0, currentDirStatus, &ERROR_RETURNED);
+    return_function_state = CustomStepperOvidiusDueShield::execute_StpTrapzProfile(profile_steps, &SEGMENT_EXISTS,  Texec,  c0, currentDirStatus, &ERROR_RETURNED);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1562,7 +1672,7 @@ bool CustomStepperOvidiusShield::setStepperGoalPositionVarStep(double * currentA
 */
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta,  volatile byte * currentDirStatus, bool * segment_exists, uint32_t * profile_steps,   unsigned char *stp_error)
+bool CustomStepperOvidiusDueShield::syncPreSetStepperGoalPositionVarStep(float * currentAbsPos_double, float * goalAbsPos_double, float * Vexec, float * Aexec, float * Texec, float * Ta,  volatile byte * currentDirStatus, bool * segment_exists, uint32_t * profile_steps,   unsigned char *stp_error)
 {
   // FUN_CODE = 17* used for stp_error assignment
   /*
@@ -1573,7 +1683,7 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep(double * c
     bool return_function_state;
 
     // I . Determine Direction of Rotation
-    return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
+    return_function_state = CustomStepperOvidiusDueShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1589,7 +1699,7 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep(double * c
     // II.3 Given II.2 the conditions for the Trapezoidal Profile are evaluted -> returnSteps_StpTrapzVelProfile -> An array of the steps of each segment is returned
     // II.4 Executes Motion with Trapezoidal Profile
     unsigned char ERROR_RETURNED;
-    return_function_state = CustomStepperOvidiusShield::testP2Pparams_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, Vexec, Aexec, Texec, Ta, &ERROR_RETURNED);
+    return_function_state = CustomStepperOvidiusDueShield::testP2Pparams_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, Vexec, Aexec, Texec, Ta, &ERROR_RETURNED);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1600,7 +1710,7 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep(double * c
     }
 
     bool SEGMENT_EXISTS; 
-    return_function_state = CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double,  *Vexec, Aexec, *Texec, *Ta, &SEGMENT_EXISTS, &ERROR_RETURNED);
+    return_function_state = CustomStepperOvidiusDueShield::segmentExists_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double,  *Vexec, Aexec, *Texec, *Ta, &SEGMENT_EXISTS, &ERROR_RETURNED);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1611,7 +1721,7 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep(double * c
     }
 
     //uint32_t PROFILE_STEPS[4];
-    return_function_state = CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, *Vexec, Aexec, Texec, Ta,  &SEGMENT_EXISTS, stp_error, profile_steps);
+    return_function_state = CustomStepperOvidiusDueShield::returnSteps_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, *Vexec, Aexec, Texec, Ta,  &SEGMENT_EXISTS, stp_error, profile_steps);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1632,7 +1742,7 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep(double * c
 }
 // =========================================================================================================== //
 
-bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep2(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta,  volatile byte * currentDirStatus, bool * segment_exists, uint32_t * profile_steps,   unsigned char *stp_error)
+bool CustomStepperOvidiusDueShield::syncPreSetStepperGoalPositionVarStep2(float * currentAbsPos_double, float * goalAbsPos_double, float * Vexec, float * Aexec, float * Texec, float * Ta,  volatile byte * currentDirStatus, bool * segment_exists, uint32_t * profile_steps,   unsigned char *stp_error)
 {
   // FUN_CODE = __* used for stp_error assignment
   /*
@@ -1642,7 +1752,7 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep2(double * 
     unsigned char ERROR_RETURNED;
     
     // I . Determine Direction of Rotation
-    return_function_state = CustomStepperOvidiusShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
+    return_function_state = CustomStepperOvidiusDueShield::setStepperGoalDirection(currentAbsPos_double, goalAbsPos_double, currentDirStatus);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1653,7 +1763,7 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep2(double * 
     }
  
     bool SEGMENT_EXISTS; 
-    return_function_state = CustomStepperOvidiusShield::segmentExists_StpTrapzVelProfile2(currentAbsPos_double, goalAbsPos_double,  *Vexec, Aexec, *Texec, *Ta, &SEGMENT_EXISTS, &ERROR_RETURNED);
+    return_function_state = CustomStepperOvidiusDueShield::segmentExists_StpTrapzVelProfile2(currentAbsPos_double, goalAbsPos_double,  *Vexec, Aexec, *Texec, *Ta, &SEGMENT_EXISTS, &ERROR_RETURNED);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1664,7 +1774,7 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep2(double * 
       *stp_error = ERROR_RETURNED;
     }
 
-    return_function_state = CustomStepperOvidiusShield::returnSteps_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, *Vexec, Aexec, Texec, Ta,  &SEGMENT_EXISTS, stp_error, profile_steps);
+    return_function_state = CustomStepperOvidiusDueShield::returnSteps_StpTrapzVelProfile(currentAbsPos_double, goalAbsPos_double, *Vexec, Aexec, Texec, Ta,  &SEGMENT_EXISTS, stp_error, profile_steps);
     if (return_function_state)
     {
       *stp_error = 0;
@@ -1685,7 +1795,7 @@ bool CustomStepperOvidiusShield::syncPreSetStepperGoalPositionVarStep2(double * 
 }
 // =========================================================================================================== //
 /*
-bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   unsigned char *stp_error)
+bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   unsigned char *stp_error)
 {
   // FUN_CODE = 18* used for stp_error assignment
   // Executed after function 17 has completed. In main code, previously, syncSetDynamixelsGoalPosition must be called!
@@ -1693,9 +1803,9 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep(double * curr
   bool return_function_state;
   unsigned char ERROR_RETURNED;
 
-  double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
+  double c0 = CustomStepperOvidiusDueShield::calculateInitialStepDelay(Aexec);
 
-  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile(profile_steps, segment_exists,  Texec,  c0, currentDirStatus, &ERROR_RETURNED);
+  return_function_state = CustomStepperOvidiusDueShield::execute_StpTrapzProfile(profile_steps, segment_exists,  Texec,  c0, currentDirStatus, &ERROR_RETURNED);
   if (return_function_state)
   {
     *stp_error = 0;
@@ -1718,15 +1828,15 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep(double * curr
 }
 */
 /*
-bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(tools::dataLogger *ptr2logger, File *ptr2logfiles, char *ptr2logfiles_names, sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck,   unsigned char *stp_error)
+bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep2(tools::dataLogger *ptr2logger, File *ptr2logfiles, char *ptr2logfiles_names, sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet,  sensors::imu_filter FILTER_SELECT, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck,   unsigned char *stp_error)
 {
 
   bool return_function_state;
   unsigned char ERROR_RETURNED;
 
-  double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
+  double c0 = CustomStepperOvidiusDueShield::calculateInitialStepDelay(Aexec);
 
-  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile2(ptr2logger, ptr2logfiles, ptr2logfiles_names, ptr2IMU, ptr2imu_packet, FILTER_SELECT,  ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error, profile_steps, segment_exists,  Texec,  c0, currentDirStatus,  UPDATE_FORCE,  UPDATE_IMU,ptr2custom_dxl, ptr2_dxl_pp_pck, ptr2_dxl_pv_pck, &ERROR_RETURNED);
+  return_function_state = CustomStepperOvidiusDueShield::execute_StpTrapzProfile2(ptr2logger, ptr2logfiles, ptr2logfiles_names, ptr2IMU, ptr2imu_packet, FILTER_SELECT,  ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error, profile_steps, segment_exists,  Texec,  c0, currentDirStatus,  UPDATE_FORCE,  UPDATE_IMU,ptr2custom_dxl, ptr2_dxl_pp_pck, ptr2_dxl_pv_pck, &ERROR_RETURNED);
   if (return_function_state)
   {
     *stp_error = 0;
@@ -1752,28 +1862,21 @@ bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep2(tools::dataL
 }
 */
 
-bool CustomStepperOvidiusShield::syncSetStepperGoalPositionVarStep3(tools::dataLogger *ptr2logger, File *ptr2logfiles, char *ptr2logfiles_names, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS , debug_error_type *force_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, double * Texec,  volatile byte * currentDirStatus, volatile bool *kill_motion_triggered, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_IMU, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck,   unsigned char *stp_error)
+//bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep3(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char *ptr2logfiles_names, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis ,sensors::currentSensor * ptr2CurrentSensor, sensors::current_packet * ptr2current_packet, debug_error_type *sensor_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_CURRENT, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck,  unsigned char *stp_error)
+//bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep3(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char * ptr2logfiles_names, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis ,sensors::currentSensor * ptr2CurrentSensor, debug_error_type *sensor_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_CURRENT, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck,  unsigned char *stp_error)
+bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep3(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char * ptr2logfiles_names[LOG_FILES_DIR_CHAR_LEN], sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis ,sensors::currentSensor * ptr2CurrentSensor, debug_error_type *sensor_error, float * currentAbsPos_double, float * goalAbsPos_double, float * Aexec, bool * segment_exists, bool UPDATE_SENSOR[], uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck,  unsigned char *stp_error)
 {
-
   // Same as syncSetStepperGoalPositionVarStep2, but here no IMU sensor is used!
+  // [24-3-21] Removed sensors::current_packet * ptr2current_packet because Adafruit ina219 is not used anymore!
   
   bool return_function_state;
-  unsigned char ERROR_RETURNED;
 
-  double c0 = CustomStepperOvidiusShield::calculateInitialStepDelay(Aexec);
+  double c0 = CustomStepperOvidiusDueShield::calculateInitialStepDelay(Aexec);
 
-  return_function_state = CustomStepperOvidiusShield::execute_StpTrapzProfile3(ptr2logger, ptr2logfiles, ptr2logfiles_names, ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENTS_KGS, force_error, profile_steps, segment_exists,  Texec,  c0, currentDirStatus,  UPDATE_FORCE,  UPDATE_IMU,ptr2custom_dxl, ptr2_dxl_pp_pck, ptr2_dxl_pv_pck, &ERROR_RETURNED);
+  return_function_state = CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(ptr2logger, ptr2logfiles, ptr2logfiles_names, ptr2ForceSensor, ptr2ForceSensorAxis, ptr2CurrentSensor,sensor_error, profile_steps, segment_exists,  c0,  UPDATE_SENSOR, ptr2custom_dxl, ptr2_dxl_pp_pck, ptr2_dxl_pv_pck,ptr2_dxl_pc_pck, ptr2_dxl_mov_pck , stp_error);
   if (return_function_state)
   {
-    *stp_error = 0;
-  }
-  else
-  {
-    *stp_error = ERROR_RETURNED;
-  }
-
-  if (*stp_error == 0)
-  {
+    // SINCE TRUE RETURNED => STEPPER REACHED GOAL POSITION
     (*currentAbsPos_double) = (*goalAbsPos_double);
     _currentAbsPos_rad = (*currentAbsPos_double);   // a private member to store abs position
     _currentAngVel_rps = 0;                         // a private member to store abs velocity
