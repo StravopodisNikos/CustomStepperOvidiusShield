@@ -34,6 +34,8 @@ enum ROT_DIR stepperDirRotation;
 
 const double pi              = 3.14159265359;
 
+volatile bool CustomStepperOvidiusDueShield::KILL_MOTION;
+
 // Constructor
 CustomStepperOvidiusDueShield::CustomStepperOvidiusDueShield(int stepID, int stepPin, int dirPin, int enblPin, int homeTriggerPin, int limitSwitchPin2, int limitSwitchPin3, int RED_LED_pin,int GREEN_LED_pin,int BLUE_LED_pin, int spr, int GEAR_FACTOR, int ft )
 {
@@ -68,13 +70,13 @@ CustomStepperOvidiusDueShield::CustomStepperOvidiusDueShield(int stepID, int ste
     _GEAR_FACTOR    = GEAR_FACTOR;                          // Gearbox Reduction of stepper motor [depends on Gearbox attached to motor]
     _ft             = ft;                                   // Frequency of stepper driver [Found in Stepper-Motor Driver Specifications]
 
-    _a              = (double) ( ( 2.0 * pi ) / (  _spr ) );               // Stepper Motor Step Angle(Angular Position of Motor shaft)[rad]
-    _ag             = (double) ( ( 2.0 * pi ) / ( _GEAR_FACTOR * _spr ) ); // Geared Motor Step Angle(Angular Position of Output shaft of Gearbox )[rad]
-    _accel_width    = (double) ( 1.0 / ACCEL_WIDTH_DENOM );                                 // Acceleration Phase width
+    _a              = (float) ( ( 2.0 * pi ) / (  _spr ) );               // Stepper Motor Step Angle(Angular Position of Motor shaft)[rad]
+    _ag             = (float) ( ( 2.0 * pi ) / ( _GEAR_FACTOR * _spr ) ); // Geared Motor Step Angle(Angular Position of Output shaft of Gearbox )[rad]
+    _accel_width    = (float) ( 1.0 / ACCEL_WIDTH_DENOM );                                 // Acceleration Phase width
     
     _accel_count    = 0;
     _ctVel_count    = 0;
-    _decel_count    = 0;
+    _decel_count    = 0; 
 
     _return_fn_state = false;
 
@@ -100,7 +102,7 @@ CustomStepperOvidiusDueShield::CustomStepperOvidiusDueShield(int stepID, int ste
     _last_CURRENT_update    = 0;
     _last_joint_pos_update  = 0;
     _last_joint_vel_update  = 0;
-}
+  }
 
 // =========================================================================================================== //
 //
@@ -164,55 +166,45 @@ void CustomStepperOvidiusDueShield::updateDelayTime(float * new_delayTime_sec, f
     // This function is executed only if updateSingleStepVarDelay sets the corresponding flag to true
     // New delay time calculated in [sec] is returned with "delayTime_sec"
 
-    const float RAMP_FACTOR       = 1.0;                        // Velocity Profile ramp slope factor
+    const float RAMP_FACTOR       = 1.0f;                        // Velocity Profile ramp slope factor
 
     // Initialize counters for Profile Execution
-    double rest = 0;
+    float rest = 0;
 
     if((*segment_exists))                                                                                                     // Linear Segment exists
     {
       if(StpPresentPosition < profile_steps[1])
       {
         _accel_count++;                                                                                                       // Acceleration Phase: delta_t -> minimizes
-        //Serial.print("EXISTS : ACCEL PHASE"); Serial.println(_accel_count);
-        (*new_delayTime_sec) =  *prev_delayTime_sec - RAMP_FACTOR * ( (2*(*prev_delayTime_sec)+rest)/(4*_accel_count+1) );     // c_n [sec]
+        (*new_delayTime_sec) =  *prev_delayTime_sec - RAMP_FACTOR * ( (2.0f*(*prev_delayTime_sec)+rest)/(4.0f*_accel_count+1.0f) );     // c_n [sec]
       }
       else if( (StpPresentPosition > profile_steps[1]) && (StpPresentPosition < profile_steps[1]+profile_steps[2]) )          // Linear Segment: delta_t -> constant
       {
         _ctVel_count++;
-        //Serial.print("EXISTS : CTVEL PHASE"); Serial.println(_ctVel_count);
         (*new_delayTime_sec) = (*prev_delayTime_sec);  
       }
       else
       {
         _decel_count++; 
-        //Serial.print("EXISTS : DECEL PHASE"); Serial.println(_decel_count);                                                                           
-        (*new_delayTime_sec) =  (*prev_delayTime_sec) - RAMP_FACTOR * ( (2*(*prev_delayTime_sec)+rest)/(4*_decel_count+1) );    // Deceleration Phase: delta_t -> maximizes [sec] 
+        (*new_delayTime_sec) =  (*prev_delayTime_sec) - RAMP_FACTOR * ( (2.0f*(*prev_delayTime_sec)+rest)/(4.0f*_decel_count+1.0f) );    // Deceleration Phase: delta_t -> maximizes [sec] 
       }
-      //*stp_error = 151;
     }
     else
 {                                                                                                                               // Linear Segment doesn't exist
       if(StpPresentPosition < profile_steps[1])                                                                                 // Acceleration Phase: delta_t -> minimizes
       {
         _accel_count++;
-        //Serial.print("NOT EXISTS : ACCEL PHASE"); Serial.println(_accel_count);
-        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*prev_delayTime_sec)+rest)/(4*_accel_count+1) );       // c_n [sec]
+        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ( (2.0f*(*prev_delayTime_sec)+rest)/(4.0f*_accel_count+1.0f) );       // c_n [sec]
       }                                   
       else
     {                                                                                                                           // Deceleration Phase: delta_t -> maximizes
         _decel_count++;                                                                                                         // Negative Value!
-        //Serial.print("NOT EXISTS : DECEL PHASE"); Serial.println(_decel_count); 
-        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ((2*(*prev_delayTime_sec)+rest)/(4*_decel_count+1) );       // Deceleration Phase: delta_t -> maximizes [sec] 
+        (*new_delayTime_sec) = (*prev_delayTime_sec) - RAMP_FACTOR * ( (2.0f*(*prev_delayTime_sec)+rest)/(4.0f*_decel_count+1.0f) );       // Deceleration Phase: delta_t -> maximizes [sec] 
       }
-      //*stp_error = 152;                                                                       
     }
 
-  //Serial.print("delayTime_sec in updateDelayTime = "); Serial.println(*new_delayTime_sec,6);
-
-  //(*prev_delayTime_sec) = (*new_delayTime_sec);
-
-  (*new_delayTime_sec) = (*new_delayTime_sec) / 2.0 ;       // Because half step pulse is generated each time!
+  // [29-3-21] HUGE BUG => AFFECTS CT VELOCITY FACE!!!! => I AM TOTALLY NOOB => THIS SHOULB BE IMPLEMENTED ONLY IN execute function!
+  //(*new_delayTime_sec) = (*new_delayTime_sec) / 2.0f ;       // Because half step pulse is generated each time!
 
   return;
 }
@@ -461,6 +453,8 @@ void CustomStepperOvidiusDueShield::getJointsCurrent_A(float * ROBOT_CUR_A, sens
     {
       update_current = false;
     }
+
+    update_current = true; // only for demo
 
     return;
 }
@@ -1024,8 +1018,8 @@ float CustomStepperOvidiusDueShield::calculateInitialStepDelay(float * Aexec)
   // FUN_CODE = 13* used for stp_error assignment
   // Determine initial step delay time for real-time profile generation: c0 with ignored inaccuracy factor [sec]
 
-  float sqrt_for_c0_calc =  (2 * _ag) /  (*Aexec);
-  float c0              =  0.676 * _ft * pow(10.0,-6.0) * sqrt(sqrt_for_c0_calc);							                  
+  float sqrt_for_c0_calc =  (2.0f * _ag) /  (*Aexec);
+  float c0              = (float) ( 0.676f * _ft * pow(10.0f,-6.0f) * sqrt(sqrt_for_c0_calc) );		// [29-3-21] Added INIT_STEP_DELAY_FACTOR for test	-> REMOVED!				                  
 
 return c0;
 }
@@ -1469,7 +1463,7 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
         // 1. Always update delay time when stepper has changed state!
         CustomStepperOvidiusDueShield::updateDelayTime(&new_delta_t, &prev_delta_t, StpPresentPosition, segmentExists, profile_steps_new, stp_error);
         
-        prev_delta_t = new_delta_t;                   // the new_delta_t hasn't yet implemented but this is the value that will return as previous...
+        // prev_delta_t = new_delta_t;                   // the new_delta_t hasn't yet implemented but this is the value that will return as previous...
 
       }
       else
@@ -1514,7 +1508,7 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
         if ( updateJointPosLog )
         {
             // make sure the dynamixel packet is received!
-            //pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS);
+            pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS);
 
             joint_pos_log_cnt++;
             ptr2logger->openFile((ptr2logfiles + POS_LOG_ID), ptr2logfiles_names[POS_LOG_ID] , O_CREAT | O_APPEND | O_WRITE, sensor_error);
@@ -1523,8 +1517,7 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
         }
         if  ( updateJointVelLog ) 
         {
-            // make sure the dynamixel packet is received!
-            //pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS);
+            // make sure the dynamixel packet is received! -> no need to wait
 
             joint_vel_log_cnt++;
             ptr2logger->openFile((ptr2logfiles + VEL_LOG_ID), ptr2logfiles_names[VEL_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
@@ -1533,6 +1526,8 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
         }
         if ( updateForceLog ) 
         {
+            pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS);
+
             force_log_cnt++;
             ptr2logger->openFile((ptr2logfiles + FOR_LOG_ID), ptr2logfiles_names[FOR_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
             ptr2logger->writeData(UPDATED_FORCE_MEASUREMENT_KGS, 1, millis(), force_log_cnt, (ptr2logfiles+ FOR_LOG_ID), sensor_error);
@@ -1540,8 +1535,6 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
         }
         if ( updateJointCurLog ) 
         {
-            // make sure the dynamixel packet is received!
-            //pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS);
 
             joint_cur_log_cnt++;
             ptr2logger->openFile((ptr2logfiles + CUR_LOG_ID), ptr2logfiles_names[CUR_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
@@ -1552,11 +1545,13 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
       }
 
       // Convert the value to micros for updateSingleStepVarDelay and check if is feasible in current stepper motor driver
-      new_delta_t_micros = (unsigned long) ( new_delta_t * 1000000) ;   // [DEL_TIME_SEC] * [SEC2MICROS]
+      // [29-3-21] /2 is introduced in order to fix HUGE bug found.
+      new_delta_t_micros = (unsigned long) ( (new_delta_t / 2.0f) * 1000000) ;   // [DEL_TIME_SEC] * [SEC2MICROS]
       if (new_delta_t_micros < MIN_STEP_DELAY_MICROS)
       {
         new_delta_t_micros = MIN_STEP_DELAY_MICROS;
       }
+      prev_delta_t = (new_delta_t / 2.0f);  // the modified new_delta_t will next implemented and this will return as previous...
       // Send step pulse unsigned long delayTime, long & StpPresentPosition, bool & updateDelayTime
       CustomStepperOvidiusDueShield::updateSingleStepVarDelay(new_delta_t_micros, &StpPresentPosition, &updateStepDelayTime);  // Updates Motor Step 
 
@@ -1571,11 +1566,17 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
         STEPPER_REACHED_GOAL_POS = false;
       }
 
+      // CHECK IF STEPPER HIT THE LIMITS
+      if (KILL_MOTION)
+      {
+        STEPPER_REACHED_GOAL_POS = true; // terminates the stepping loop
+      }
+
     }while(  !STEPPER_REACHED_GOAL_POS ); // while loop takes into consideration ONLY the Stepper!
 
-    //if( (STEPPER_REACHED_GOAL_POS) && (*sensor_error == NO_ERROR) && (*stp_error == NO_STP_ERROR) )
-    if ( STEPPER_REACHED_GOAL_POS ) 
+    if ( STEPPER_REACHED_GOAL_POS && (!KILL_MOTION)  ) // [29-3-21] returns true only if stepper reached target without hitting the limits!
     {
+      KILL_MOTION = false;     // change the volatile emergency variable in order to continue safe operation
       return true;
     }
     else
@@ -1864,7 +1865,7 @@ bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep2(tools::da
 
 //bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep3(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char *ptr2logfiles_names, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis ,sensors::currentSensor * ptr2CurrentSensor, sensors::current_packet * ptr2current_packet, debug_error_type *sensor_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_CURRENT, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck,  unsigned char *stp_error)
 //bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep3(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char * ptr2logfiles_names, sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis ,sensors::currentSensor * ptr2CurrentSensor, debug_error_type *sensor_error, double * currentAbsPos_double, double * goalAbsPos_double, double * Aexec, bool * segment_exists, bool UPDATE_FORCE, bool UPDATE_CURRENT, uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck,  unsigned char *stp_error)
-bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep3(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char * ptr2logfiles_names[LOG_FILES_DIR_CHAR_LEN], sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis ,sensors::currentSensor * ptr2CurrentSensor, debug_error_type *sensor_error, float * currentAbsPos_double, float * goalAbsPos_double, float * Aexec, bool * segment_exists, bool UPDATE_SENSOR[], uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck,  unsigned char *stp_error)
+bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep3(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char * ptr2logfiles_names[LOG_FILES_DIR_CHAR_LEN], sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis ,sensors::currentSensor * ptr2CurrentSensor, debug_error_type *sensor_error, float * currentAbsPos_double, float * goalAbsPos_double, float * Aexec, bool * segment_exists, bool UPDATE_SENSOR[], uint32_t * profile_steps, DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck, unsigned char *stp_error)
 {
   // Same as syncSetStepperGoalPositionVarStep2, but here no IMU sensor is used!
   // [24-3-21] Removed sensors::current_packet * ptr2current_packet because Adafruit ina219 is not used anymore!

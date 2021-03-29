@@ -8,8 +8,9 @@
 #define ACCEL_WIDTH_DENOM		        5
 #define MIN_STEP_DELAY_MICROS           25            // because Stepper driver's frequency 20kHz
 #define MOTION_TIMEOUT_MILLIS           3000            
-#define PAUSE_FOR_DXL_COM_MILLIS        1 
-#define HOMING_TIMEOUT_MILLIS		    5000	
+#define PAUSE_FOR_DXL_COM_MILLIS        6 
+#define HOMING_TIMEOUT_MILLIS		    5000
+
 #include <avr/pgmspace.h>
 // CAUTION! -> PINS 0,1,2,7,8 ARE USED FOR SERIAL PORT COMMUNICATION AND MUST NOT BE CONFIGURED!!!
 
@@ -25,6 +26,8 @@ const PROGMEM uint8_t HALL_SWITCH_PIN2    = 18;				  // This is the Hall effect-
 const PROGMEM uint8_t HALL_SWITCH_PIN3    = 19;			      // This is the Hall effect-MAX limit switch    (5 when no interrupt used)
 // IF DXL SHIELD <-
 const PROGMEM float   ETDF = 1.50f;
+const PROGMEM float   INIT_STEP_DELAY_FACTOR = 1.50f;         // Applied to c0 calculation to make it bigger
+
 const PROGMEM uint8_t STP_MOVING_STATUS_THRESHOLD   = 1;
 const PROGMEM uint8_t STEP_Pin                      = 6;
 const PROGMEM uint8_t DIR_Pin        	            = 9;

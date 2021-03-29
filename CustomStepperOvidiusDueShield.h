@@ -27,6 +27,9 @@ enum ROT_DIR{CW, CCW};
 class CustomStepperOvidiusDueShield
 {
     public:
+
+        static volatile bool KILL_MOTION;
+
         CustomStepperOvidiusDueShield(int stepID, int stepPin, int dirPin, int enblPin, int homeTriggerPin, int limitSwitchPin2, int limitSwitchPin3, int RED_LED_pin,int GREEN_LED_pin,int BLUE_LED_pin, int spr, int GEAR_FACTOR, int ft );
 
         void updateStpAngVelStp(float &current_ang_vel, float delay_sec);
@@ -145,10 +148,9 @@ class CustomStepperOvidiusDueShield
 
         void updateSingleStepVarDelay(unsigned long delayTime, uint32_t * StpPresentPosition, bool * updateDelayTime);
 
-        void updateDelayTime(float * new_delayTime_sec, float * prev_delayTime_sec, uint32_t StpPresentPosition, bool * segment_exists, uint32_t * profile_steps, unsigned char *stp_error);
-
         void updateForceMeasurements(sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, float * UPDATED_FORCE_MEASUREMENTS_KGS, bool & update_force ,debug_error_type *sensor_error);
 
+        void updateDelayTime(float * new_delayTime_sec, float * prev_delayTime_sec, uint32_t StpPresentPosition, bool * segment_exists, uint32_t * profile_steps, unsigned char *stp_error);
 
         //void updateIMU(sensors::imu9dof * ptr2IMU, sensors::imu_packet * ptr2imu_packet, sensors::imu_filter FILTER_SELECT, bool &update_imu, debug_error_type * imu_error);
 
