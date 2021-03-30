@@ -387,8 +387,6 @@ void CustomStepperOvidiusDueShield::getJointsAngVelocity_rs(float * ROBOT_ANG_VE
       // dxl
       if( ptr2custom_dxl->syncGetDynamixelsPresentVelocity(ptr2_dxl_pv_pck->Dxl_ids,ptr2_dxl_pv_pck->Dxl_ids_size, ptr2_dxl_pv_pck->dxl_pv, ptr2_dxl_pv_pck->SR_pv, error_code, ptr2_dxl_pv_pck->dxl2ard_obj) )
       {
-        // wait for syncRead to finish data transfer(?)
-
         // convert dxl vel units -> radians/sec
         ROBOT_ANG_VEL_RS[1] = ptr2custom_dxl->convertDxlVelUnits2RadPsec(ptr2_dxl_pv_pck->dxl_pv[0]);
         ROBOT_ANG_VEL_RS[2] = ptr2custom_dxl->convertDxlVelUnits2RadPsec(ptr2_dxl_pv_pck->dxl_pv[1]);
@@ -427,34 +425,42 @@ void CustomStepperOvidiusDueShield::getJointsCurrent_A(float * ROBOT_CUR_A, sens
 
       _last_CURRENT_update = millis();
 
-      // [24-3-21] stepper-ACS712 current module
-      ptr2CurrentSensor->measureCurrentACS712_A(stepper_measured_current, &current_sensor_error_returned );
-      ROBOT_CUR_A[0] = stepper_measured_current;
       // dxl
       if ( ptr2custom_dxl->syncGetDynamixelsPresentCurrent(ptr2_dxl_pc_pck->Dxl_ids,ptr2_dxl_pc_pck->Dxl_ids_size,ptr2_dxl_pc_pck->dxl_pc,ptr2_dxl_pc_pck->SR_pc, error_code,ptr2_dxl_pc_pck->dxl2ard_obj) )
       {
         // convert mA-> A
-        ROBOT_CUR_A[1] = ( ptr2_dxl_pc_pck->dxl_pc[0] / 1000.0 );
-        ROBOT_CUR_A[2] = ( ptr2_dxl_pc_pck->dxl_pc[1] / 1000.0 );
-        ROBOT_CUR_A[3] = ( ptr2_dxl_pc_pck->dxl_pc[2] / 1000.0 );
+        ROBOT_CUR_A[1] = (float) ( ptr2_dxl_pc_pck->dxl_pc[0] / 1000.0f );
+        ROBOT_CUR_A[2] = (float) ( ptr2_dxl_pc_pck->dxl_pc[1] / 1000.0f );
+        ROBOT_CUR_A[3] = (float) ( ptr2_dxl_pc_pck->dxl_pc[2] / 1000.0f );
 
-        if ( (current_sensor_error_returned==NO_ERROR) && (error_code == NO_ERROR) )
-        {
-          update_current = true;
-        }
-        else
-        {
-          update_current = false;
-          //*error_code = syncGetPC_returned_error;
-        }
+        // [24-3-21] stepper-ACS712 current module
+        // [30-3-21] After dxl syncGet because delay is used in measureCurrentACS712_A execution time ~1ms
+        ptr2CurrentSensor->measureCurrentACS712_A(stepper_measured_current, &current_sensor_error_returned );
+        ROBOT_CUR_A[0] = stepper_measured_current;
       }
+      else
+      {
+        update_current = false; return;
+      }
+
+
+      if ( current_sensor_error_returned == NO_ERROR )
+      {
+        update_current = true;
+      }
+      else
+      {
+        update_current = false;
+      }
+
+
     }
     else
     {
       update_current = false;
     }
 
-    update_current = true; // only for demo
+    //update_current = true; // only for demo
 
     return;
 }
@@ -468,10 +474,16 @@ bool CustomStepperOvidiusDueShield::getDynamixelsMotionState(DynamixelProPlusOvi
   bool DXLS_FINISHED_MOTION = false;
   uint8_t DXL_MOVING[Dxls];
 
-  ptr2custom_dxl->syncGetDynamixelsMoving(ptr2_dxl_mov_pck->Dxl_ids, ptr2_dxl_mov_pck->Dxl_ids_size, ptr2_dxl_mov_pck->dxl_mov, ptr2_dxl_mov_pck->SR_mov, error_code, ptr2_dxl_mov_pck->dxl2ard_obj);
-  DXL_MOVING[0] = ptr2_dxl_mov_pck->dxl_mov[0];
-  DXL_MOVING[1] = ptr2_dxl_mov_pck->dxl_mov[1];
-  DXL_MOVING[2] = ptr2_dxl_mov_pck->dxl_mov[2];
+  if ( ptr2custom_dxl->syncGetDynamixelsMoving(ptr2_dxl_mov_pck->Dxl_ids, ptr2_dxl_mov_pck->Dxl_ids_size, ptr2_dxl_mov_pck->dxl_mov, ptr2_dxl_mov_pck->SR_mov, error_code, ptr2_dxl_mov_pck->dxl2ard_obj) )
+  {
+    DXL_MOVING[0] = ptr2_dxl_mov_pck->dxl_mov[0];
+    DXL_MOVING[1] = ptr2_dxl_mov_pck->dxl_mov[1];
+    DXL_MOVING[2] = ptr2_dxl_mov_pck->dxl_mov[2];
+  }
+  else
+  {
+    return false;
+  }
 
   for (size_t i = 0; i < Dxls; i++)
   {
@@ -510,6 +522,35 @@ void CustomStepperOvidiusDueShield::setStepperLed(const unsigned char *led_indic
 
 // =========================================================================================================== //
 
+bool CustomStepperOvidiusDueShield::readSessionFileLoggedData(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char * ptr2logfiles_names [LOG_FILES_DIR_CHAR_LEN], byte FILE_ID, char * data_buffer, int & buffer_size, int max_data_length, debug_error_type *sensor_error)
+{
+  // Sensor File ID is given by user and only the specified file data are returned
+
+  if (FILE_ID > CUR_LOG_ID) // [30-3-21] max sensor id is that of the current sensor
+  {
+    *sensor_error = WRONG_FILE_ID_GIVEN;
+    return false;
+  }
+  
+  ptr2logger->openFile((ptr2logfiles + FILE_ID), ptr2logfiles_names[FILE_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
+  
+  ptr2logger->readData(data_buffer, buffer_size, max_data_length, (ptr2logfiles + FILE_ID), sensor_error);
+  
+  ptr2logger->closeFile((ptr2logfiles + FILE_ID), sensor_error);
+
+  if (* sensor_error == NO_ERROR)
+  {
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+  
+}
+
+// =========================================================================================================== //
+
 bool CustomStepperOvidiusDueShield::setStepperHomePositionSlow(float * currentAbsPos_double, volatile byte *currentDirStatus,  volatile bool *kill_motion_triggered,  unsigned char *stp_error){
 /*
  *	FUN_CODE = 3 used for stp_error assignment, each error is given the value: 1*... for example: 11, 12, 13
@@ -539,7 +580,7 @@ bool CustomStepperOvidiusDueShield::setStepperHomePositionSlow(float * currentAb
       CustomStepperOvidiusDueShield::singleStepVarDelay(homing_stepping_delay);                  
 
       // Everything worked
-      *stp_error = 0;
+      *stp_error = NO_STP_ERROR;
   }
 
   // sets global variable to new position(HOME) value
@@ -547,9 +588,8 @@ bool CustomStepperOvidiusDueShield::setStepperHomePositionSlow(float * currentAb
   // set private var to current abs pos in rad
   _currentAbsPos_rad    = *currentAbsPos_double;
 
-if (*stp_error == 0)
+if (*stp_error == NO_STP_ERROR)
 {
-  
   return true;
 }
 else
@@ -1425,8 +1465,6 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
     unsigned long force_log_cnt = 0;        // single zero line was written in file creation!
     bool updateForceLog = false;
 
-    //const float ETDF              = 1.50;                     // Execution Time Deviation Factor (experimental calculation)
-
     // Initialize variable for timing/derivative calculations
     float prev_delta_t = delta_t;                            // delta_t <=> c0
     float new_delta_t  = prev_delta_t;                       // Delay time in [sec] - Here the initial value is given, will change inside loop
@@ -1458,7 +1496,7 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
       // Inside this if every desired update() function must be called
       if (updateStepDelayTime)
       {
-        setStepperLed(stepper_stepping_in_progress); // Olive
+        setStepperLed(stepper_turn_off_led);
 
         // 1. Always update delay time when stepper has changed state!
         CustomStepperOvidiusDueShield::updateDelayTime(&new_delta_t, &prev_delta_t, StpPresentPosition, segmentExists, profile_steps_new, stp_error);
@@ -1468,7 +1506,7 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
       }
       else
       {
-        setStepperLed(stepper_turn_off_led);         // it has meaning to "see" if an update takes too long.. Only then we are able to see the "blinking"
+        setStepperLed(stepper_stepping_in_progress);         // Olive
 
         // HERE until next step pin state change we have time to calculate real time data...
         // CAUTION -> NOTHING is ALWAYS executed here! Here we have time to check if it is time 
@@ -1507,39 +1545,46 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
         //if ( (updateJointPosLog) && (*stp_error != NO_ERROR) )
         if ( updateJointPosLog )
         {
-            // make sure the dynamixel packet is received!
-            pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS);
-
-            joint_pos_log_cnt++;
-            ptr2logger->openFile((ptr2logfiles + POS_LOG_ID), ptr2logfiles_names[POS_LOG_ID] , O_CREAT | O_APPEND | O_WRITE, sensor_error);
-            ptr2logger->writeData(CURRENT_CONFIGURATION_RAD, nDoF,  millis(), joint_pos_log_cnt, (ptr2logfiles + POS_LOG_ID), sensor_error);
-            ptr2logger->closeFile((ptr2logfiles + POS_LOG_ID), sensor_error);
+            // [30-3-21] Makes sure the dynamixel packet is received and no delay is used!
+            // pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS); -> used extra if and removed the bad delay!
+            // Since: updateJointPosLog->true => _last_joint_pos_update was updated just before sync read command
+            if ( millis() - _last_joint_pos_update > PAUSE_FOR_DXL_COM_MILLIS )
+            {
+              joint_pos_log_cnt++;
+              ptr2logger->openFile((ptr2logfiles + POS_LOG_ID), ptr2logfiles_names[POS_LOG_ID] , O_CREAT | O_APPEND | O_WRITE, sensor_error);
+              ptr2logger->writeData(CURRENT_CONFIGURATION_RAD, nDoF,  millis(), joint_pos_log_cnt, (ptr2logfiles + POS_LOG_ID), sensor_error);
+              ptr2logger->closeFile((ptr2logfiles + POS_LOG_ID), sensor_error);
+            }
         }
         if  ( updateJointVelLog ) 
         {
-            // make sure the dynamixel packet is received! -> no need to wait
-
-            joint_vel_log_cnt++;
-            ptr2logger->openFile((ptr2logfiles + VEL_LOG_ID), ptr2logfiles_names[VEL_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
-            ptr2logger->writeData(CURRENT_JOINT_VELOCITY_RS, nDoF, millis(), joint_vel_log_cnt, (ptr2logfiles + VEL_LOG_ID), sensor_error);
-            ptr2logger->closeFile((ptr2logfiles + VEL_LOG_ID), sensor_error);
+            if ( millis() - _last_joint_vel_update > PAUSE_FOR_DXL_COM_MILLIS )
+            {
+              joint_vel_log_cnt++;
+              ptr2logger->openFile((ptr2logfiles + VEL_LOG_ID), ptr2logfiles_names[VEL_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
+              ptr2logger->writeData(CURRENT_JOINT_VELOCITY_RS, nDoF, millis(), joint_vel_log_cnt, (ptr2logfiles + VEL_LOG_ID), sensor_error);
+              ptr2logger->closeFile((ptr2logfiles + VEL_LOG_ID), sensor_error);
+            }
         }
         if ( updateForceLog ) 
         {
-            pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS);
-
-            force_log_cnt++;
-            ptr2logger->openFile((ptr2logfiles + FOR_LOG_ID), ptr2logfiles_names[FOR_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
-            ptr2logger->writeData(UPDATED_FORCE_MEASUREMENT_KGS, 1, millis(), force_log_cnt, (ptr2logfiles+ FOR_LOG_ID), sensor_error);
-            ptr2logger->closeFile((ptr2logfiles + FOR_LOG_ID), sensor_error);
+            if ( millis() - _last_FORCE_update > PAUSE_FOR_DXL_COM_MILLIS )
+            {
+              force_log_cnt++;
+              ptr2logger->openFile((ptr2logfiles + FOR_LOG_ID), ptr2logfiles_names[FOR_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
+              ptr2logger->writeData(UPDATED_FORCE_MEASUREMENT_KGS, 1, millis(), force_log_cnt, (ptr2logfiles+ FOR_LOG_ID), sensor_error);
+              ptr2logger->closeFile((ptr2logfiles + FOR_LOG_ID), sensor_error);
+            }
         }
         if ( updateJointCurLog ) 
         {
-
-            joint_cur_log_cnt++;
-            ptr2logger->openFile((ptr2logfiles + CUR_LOG_ID), ptr2logfiles_names[CUR_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
-            ptr2logger->writeData(CURRENT_MEASUREMENTS_mA, nDoF, millis(), joint_cur_log_cnt, (ptr2logfiles + CUR_LOG_ID), sensor_error);
-            ptr2logger->closeFile((ptr2logfiles + CUR_LOG_ID), sensor_error);              
+            if ( millis() - _last_CURRENT_update > PAUSE_FOR_DXL_COM_MILLIS )
+            {          
+              joint_cur_log_cnt++;
+              ptr2logger->openFile((ptr2logfiles + CUR_LOG_ID), ptr2logfiles_names[CUR_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
+              ptr2logger->writeData(CURRENT_MEASUREMENTS_mA, nDoF, millis(), joint_cur_log_cnt, (ptr2logfiles + CUR_LOG_ID), sensor_error);
+              ptr2logger->closeFile((ptr2logfiles + CUR_LOG_ID), sensor_error);
+            }              
         }   
 
       }
@@ -1574,7 +1619,8 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
 
     }while(  !STEPPER_REACHED_GOAL_POS ); // while loop takes into consideration ONLY the Stepper!
 
-    if ( STEPPER_REACHED_GOAL_POS && (!KILL_MOTION)  ) // [29-3-21] returns true only if stepper reached target without hitting the limits!
+    //if ( STEPPER_REACHED_GOAL_POS && (!KILL_MOTION)  ) // [29-3-21] returns true only if stepper reached target without hitting the limits!
+    if ( STEPPER_REACHED_GOAL_POS )
     {
       KILL_MOTION = false;     // change the volatile emergency variable in order to continue safe operation
       return true;
@@ -1587,6 +1633,209 @@ bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile3(tools::dataLogger *
 } // END OF FUNCTION
 
 // =========================================================================================================== //
+/*
+bool CustomStepperOvidiusDueShield::execute_StpTrapzProfile4(tools::dataLogger *ptr2logger, File *ptr2logfiles, const char * ptr2logfiles_names [LOG_FILES_DIR_CHAR_LEN],  sensors::force3axis * ptr2ForceSensor, HX711 * ptr2ForceSensorAxis, sensors::currentSensor * ptr2CurrentSensor, debug_error_type *sensor_error, uint32_t * profile_steps, bool * segmentExists, float delta_t, bool UPDATE_SENSOR[] , DynamixelProPlusOvidiusShield *ptr2custom_dxl,  DXL_PP_PACKET *ptr2_dxl_pp_pck, DXL_PV_PACKET *ptr2_dxl_pv_pck, DXL_PC_PACKET *ptr2_dxl_pc_pck, DXL_MOV_PACKET *ptr2_dxl_mov_pck, unsigned char * stp_error)
+{
+    // [30-3-21] SAME AS execute_StpTrapzProfile3, but here even if stepper finishes continues to check for dxls moving and logs data!
+
+    bool DYNAMIXELS_STOPED_MOVING = false;  // assumes that sync set goal position command to dxl was sent before this function call!!!
+    bool STEPPER_REACHED_GOAL_POS = false;  // logical, it hasn't even started!
+    bool SYNC_MOTION_FINISHED     = false;
+
+    // Vars for real time position/velocity
+    float CURRENT_CONFIGURATION_RAD[nDoF];
+    float CURRENT_JOINT_VELOCITY_RS[nDoF];
+    unsigned long joint_pos_log_cnt = 0;    // 1 => single zero line was written in file creation! 0 => nothing was written @file creation
+    unsigned long joint_vel_log_cnt = 0;    // single zero line was written in file creation!
+    bool updateJointPosLog = false;
+    bool updateJointVelLog = false;
+    // Vars for real time current measurement
+    float CURRENT_MEASUREMENTS_mA[nDoF];
+    unsigned long joint_cur_log_cnt = 0;    // single zero line was written in file creation!
+    bool updateJointCurLog = false;
+
+    // Vars for force measurements
+    //ptr2ForceSensor = ForceSensor;
+    float * UPDATED_FORCE_MEASUREMENT_KGS;   // [21-3-21] single force measurement Zaxis 
+    unsigned long force_update_duration;
+    unsigned long started_force_update;
+    unsigned long force_log_cnt = 0;        // single zero line was written in file creation!
+    bool updateForceLog = false;
+
+    // Initialize variable for timing/derivative calculations
+    float prev_delta_t = delta_t;                            // delta_t <=> c0
+    float new_delta_t  = prev_delta_t;                       // Delay time in [sec] - Here the initial value is given, will change inside loop
+    unsigned long new_delta_t_micros;                         // Delay time in [micros]
+
+    uint32_t StpPresentPosition = 0;
+    bool updateStepDelayTime = false;                         // the delay time MUST NOT BE CALCULATED in first do-while iteration
+
+    // Variables for Real-time Stepper Position/Velocity calculation
+    _prevAbsPos_rad = _currentAbsPos_rad;
+    _prevAngVel_rps = _currentAngVel_rps;
+    _prevAngAccel_rps2 = _currentAngAccel_rps2;
+
+    // profile steps must be multiplied by 2!
+    uint32_t profile_steps_new[PROF_STEPS_SIZE];
+    for (size_t i = 0; i < PROF_STEPS_SIZE; i++)
+    {
+      profile_steps_new[i] = 2 * profile_steps[i]; 
+    }
+    
+    _accel_count    = 0;                                      // must initialize each phase steps ctr based on steps calculated
+    _ctVel_count    = 0;
+    _decel_count    = -profile_steps_new[3];                         
+
+    // Stepping loop
+    unsigned long motor_movement_start = millis();
+    do
+    {
+      if ( !STEPPER_REACHED_GOAL_POS )
+      {
+          // Inside this if every desired update() function must be called
+          if (updateStepDelayTime)
+          {
+            setStepperLed(stepper_turn_off_led);
+
+            // 1. Always update delay time when stepper has changed state!
+            CustomStepperOvidiusDueShield::updateDelayTime(&new_delta_t, &prev_delta_t, StpPresentPosition, segmentExists, profile_steps_new, stp_error);
+            
+            // prev_delta_t = new_delta_t;                   // the new_delta_t hasn't yet implemented but this is the value that will return as previous...
+
+          }
+          else
+          {
+            setStepperLed(stepper_stepping_in_progress);         // Olive
+
+            // HERE until next step pin state change we have time to calculate real time data...
+            // CAUTION -> NOTHING is ALWAYS executed here! Here we have time to check if it is time 
+            // to update the real time data, and if and only if time has come, we calculate/read!
+
+            // 2. Updates force sensor values -> talks to HX711 using OvidiusSensors methods
+            if (UPDATE_SENSOR[FOR_LOG_ID])
+            {
+              //started_force_update = micros();
+              updateForceMeasurements(ptr2ForceSensor, ptr2ForceSensorAxis, UPDATED_FORCE_MEASUREMENT_KGS, updateForceLog, sensor_error);
+              //force_update_duration = micros() - started_force_update;
+            }
+
+            // 3. read current joint positions
+            if (UPDATE_SENSOR[POS_LOG_ID])
+            {
+              getJointsAbsPosition_rad(CURRENT_CONFIGURATION_RAD, ptr2custom_dxl, ptr2_dxl_pp_pck, StpPresentPosition, updateJointPosLog, stp_error);
+            }
+
+            // 4. read current joint velocities
+            if (UPDATE_SENSOR[VEL_LOG_ID])
+            {
+              getJointsAngVelocity_rs(CURRENT_JOINT_VELOCITY_RS, ptr2custom_dxl, ptr2_dxl_pv_pck, new_delta_t, updateJointVelLog ,  stp_error);
+            }
+
+            // 5. read current of joints
+            if (UPDATE_SENSOR[CUR_LOG_ID])
+            {
+              //getJointsCurrent_mA(CURRENT_MEASUREMENTS_mA, ptr2CurrentSensor, ptr2current_packet,ptr2custom_dxl,ptr2_dxl_pc_pck, updateJointCurLog, stp_error  ); -> for INA219b only!
+              getJointsCurrent_A(CURRENT_MEASUREMENTS_mA, ptr2CurrentSensor, ptr2custom_dxl, ptr2_dxl_pc_pck, updateJointCurLog, stp_error  );
+            }
+
+            // 6. check what dynamixels are doing(moving=1,finished=0)
+
+            // 7. data logs:
+            //if ( (updateJointPosLog) && (*stp_error != NO_ERROR) )
+            if ( updateJointPosLog )
+            {
+                // [30-3-21] Makes sure the dynamixel packet is received and no delay is used!
+                // pauseForFixedTime_millis(PAUSE_FOR_DXL_COM_MILLIS); -> used extra if and removed the bad delay!
+                // Since: updateJointPosLog->true => _last_joint_pos_update was updated just before sync read command
+                if ( millis() - _last_joint_pos_update > PAUSE_FOR_DXL_COM_MILLIS )
+                {
+                  joint_pos_log_cnt++;
+                  ptr2logger->openFile((ptr2logfiles + POS_LOG_ID), ptr2logfiles_names[POS_LOG_ID] , O_CREAT | O_APPEND | O_WRITE, sensor_error);
+                  ptr2logger->writeData(CURRENT_CONFIGURATION_RAD, nDoF,  millis(), joint_pos_log_cnt, (ptr2logfiles + POS_LOG_ID), sensor_error);
+                  ptr2logger->closeFile((ptr2logfiles + POS_LOG_ID), sensor_error);
+                }
+            }
+            if  ( updateJointVelLog ) 
+            {
+                if ( millis() - _last_joint_vel_update > PAUSE_FOR_DXL_COM_MILLIS )
+                {
+                  joint_vel_log_cnt++;
+                  ptr2logger->openFile((ptr2logfiles + VEL_LOG_ID), ptr2logfiles_names[VEL_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
+                  ptr2logger->writeData(CURRENT_JOINT_VELOCITY_RS, nDoF, millis(), joint_vel_log_cnt, (ptr2logfiles + VEL_LOG_ID), sensor_error);
+                  ptr2logger->closeFile((ptr2logfiles + VEL_LOG_ID), sensor_error);
+                }
+            }
+            if ( updateForceLog ) 
+            {
+                if ( millis() - _last_FORCE_update > PAUSE_FOR_DXL_COM_MILLIS )
+                {
+                  force_log_cnt++;
+                  ptr2logger->openFile((ptr2logfiles + FOR_LOG_ID), ptr2logfiles_names[FOR_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
+                  ptr2logger->writeData(UPDATED_FORCE_MEASUREMENT_KGS, 1, millis(), force_log_cnt, (ptr2logfiles+ FOR_LOG_ID), sensor_error);
+                  ptr2logger->closeFile((ptr2logfiles + FOR_LOG_ID), sensor_error);
+                }
+            }
+            if ( updateJointCurLog ) 
+            {
+                if ( millis() - _last_CURRENT_update > PAUSE_FOR_DXL_COM_MILLIS )
+                {          
+                  joint_cur_log_cnt++;
+                  ptr2logger->openFile((ptr2logfiles + CUR_LOG_ID), ptr2logfiles_names[CUR_LOG_ID], O_CREAT | O_APPEND | O_WRITE, sensor_error);
+                  ptr2logger->writeData(CURRENT_MEASUREMENTS_mA, nDoF, millis(), joint_cur_log_cnt, (ptr2logfiles + CUR_LOG_ID), sensor_error);
+                  ptr2logger->closeFile((ptr2logfiles + CUR_LOG_ID), sensor_error);
+                }              
+            }   
+
+          }
+
+          // Convert the value to micros for updateSingleStepVarDelay and check if is feasible in current stepper motor driver
+          // [29-3-21] /2 is introduced in order to fix HUGE bug found.
+          new_delta_t_micros = (unsigned long) ( (new_delta_t / 2.0f) * 1000000) ;   // [DEL_TIME_SEC] * [SEC2MICROS]
+          if (new_delta_t_micros < MIN_STEP_DELAY_MICROS)
+          {
+            new_delta_t_micros = MIN_STEP_DELAY_MICROS;
+          }
+          prev_delta_t = (new_delta_t / 2.0f);  // the modified new_delta_t will next implemented and this will return as previous...
+          // Send step pulse unsigned long delayTime, long & StpPresentPosition, bool & updateDelayTime
+          CustomStepperOvidiusDueShield::updateSingleStepVarDelay(new_delta_t_micros, &StpPresentPosition, &updateStepDelayTime);  // Updates Motor Step 
+
+          // CHECK IF STEPPER FINISHED
+          if ( (profile_steps_new[0] - StpPresentPosition) == 0)
+          {
+            STEPPER_REACHED_GOAL_POS = true;
+            updateStepDelayTime = false;
+          }
+          else
+          {
+            STEPPER_REACHED_GOAL_POS = false;
+          }
+      }
+
+      // After the stepper part, checks what the dynamixels are doing..
+      
+      // CHECK IF STEPPER HIT THE LIMITS
+      if (KILL_MOTION)
+      {
+        STEPPER_REACHED_GOAL_POS = true; // terminates the stepping loop
+      }
+
+    }while(   ); // while loop takes into consideration ONLY the Stepper!
+
+    //if ( STEPPER_REACHED_GOAL_POS && (!KILL_MOTION)  ) // [29-3-21] returns true only if stepper reached target without hitting the limits!
+    if ( STEPPER_REACHED_GOAL_POS )
+    {
+      KILL_MOTION = false;     // change the volatile emergency variable in order to continue safe operation
+      return true;
+    }
+    else
+    {
+      return false;
+    }
+
+} // END OF FUNCTION
+*/
+// =========================================================================================================== //
+
 /*
 bool CustomStepperOvidiusDueShield::setStepperGoalPositionVarStep(double * currentAbsPos_double, double * goalAbsPos_double, double * Vexec, double * Aexec, double * Texec, double * Ta,  volatile byte * currentDirStatus, uint32_t * relative_movement_in_steps, volatile bool *kill_motion_triggered, bool * segment_exists, uint32_t * profile_steps,   unsigned char *stp_error)
 {
@@ -1882,10 +2131,13 @@ bool CustomStepperOvidiusDueShield::syncSetStepperGoalPositionVarStep3(tools::da
     _currentAbsPos_rad = (*currentAbsPos_double);   // a private member to store abs position
     _currentAngVel_rps = 0;                         // a private member to store abs velocity
     _currentAngAccel_rps2 = 0;                      // a private member to store abs acceleration
+
+    KILL_MOTION = false;
     return true;
   }
   else
   {
+    KILL_MOTION = false;
     return false;
   }
 
