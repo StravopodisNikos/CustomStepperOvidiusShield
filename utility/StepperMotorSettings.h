@@ -27,6 +27,7 @@ const PROGMEM uint8_t HALL_SWITCH_PIN3    = 19;			      // This is the Hall effe
 // IF DXL SHIELD <-
 const PROGMEM float   ETDF = 1.50f;
 const PROGMEM float   INIT_STEP_DELAY_FACTOR = 1.50f;         // Applied to c0 calculation to make it bigger
+const PROGMEM float   ANG_POS_THRESHOLD      = 0.05f;         // Joint position accuracy[rad]
 
 const PROGMEM uint8_t STP_MOVING_STATUS_THRESHOLD   = 1;
 const PROGMEM uint8_t STEP_Pin                      = 6;
